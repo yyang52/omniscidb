@@ -2142,11 +2142,26 @@ bool RelProject::hasWindowFunctionExpr() const {
   }
   return false;
 }
+
+
 namespace details {
 
 class RelAlgDispatcher {
  public:
+  //FIXME remove cat
+  RelAlgDispatcher() {}
   RelAlgDispatcher(const Catalog_Namespace::Catalog& cat) : cat_(cat) {}
+
+  //TODO WIP for code refactor remove root_dag_builder in the future
+  std::shared_ptr<RelAlgNode> module_run(const rapidjson::Value& rels) {
+    auto rels_it = rels.Begin()
+    const auto& crt_node = *rels_it;
+    const auto id = node_id(crt_node);
+    CHECK_EQ(static_cast<size_t>(id), nodes_.size());
+    CHECK(crt_node.IsObject());
+    std::shared_ptr<RelAlgNode> ra_node = nullptr;
+    return dispatchAggregate(crt_node);
+  }
 
   std::vector<std::shared_ptr<RelAlgNode>> run(const rapidjson::Value& rels,
                                                RelAlgDagBuilder& root_dag_builder) {
@@ -2597,6 +2612,8 @@ class RelAlgDispatcher {
 };
 
 }  // namespace details
+
+
 
 RelAlgDagBuilder::RelAlgDagBuilder(const std::string& query_ra,
                                    const Catalog_Namespace::Catalog& cat,

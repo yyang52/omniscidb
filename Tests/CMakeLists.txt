@@ -29,6 +29,7 @@ add_executable(ShardedTableEpochConsistencyTest ShardedTableEpochConsistencyTest
 add_executable(DiskCacheQueryTest DiskCacheQueryTest.cpp)
 add_executable(CachingFileMgrTest CachingFileMgrTest.cpp)
 add_executable(JSONTest JSONTest.cpp)
+add_executable(TestOModuler TestOModuler.cpp)
 
 if(ENABLE_CUDA)
   message(DEBUG "Tests CUDA_COMPILATION_ARCH: ${CUDA_COMPILATION_ARCH}")
@@ -280,6 +281,7 @@ add_test(DiskCacheQueryTest DiskCacheQueryTest ${TEST_ARGS})
 add_test(CachingFileMgrTest CachingFileMgrTest ${TEST_ARGS})
 add_test(LoadTableTest LoadTableTest ${TEST_ARGS})
 add_test(JSONTest JSONTest ${TEST_ARGS})
+add_test(TestOModuler TestOModuler ${TEST_ARGS})
 
 if(ENABLE_CUDA)
   add_test(GpuSharedMemoryTest GpuSharedMemoryTest ${TEST_ARGS})
