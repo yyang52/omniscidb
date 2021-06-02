@@ -15,21 +15,33 @@
  */
 
 #include <gtest/gtest.h>
-#include <iostream>
-#include "RelAlgDagBuilder.cpp"
 
-using namespace std;
+#include "TestHelpers.h"
+#include "Logger/Logger.h"
 
-TEST_F(TestOModuler, SimpleProject) {
-  cout << "hello world" << endl;
-  OModuler oModuler();
-  std::shared_ptr<RelAlgNode> raPtr = oModuler.ast_convert(nullptr);
+TEST(TestOModuler, SimpleProject) {
+  EXPECT_EQ(1, 1);
+  // OModuler oModuler();
+  // std::shared_ptr<RelAlgNode> raPtr = oModuler.ast_convert(nullptr);
 
-  auto workUnit =
-      OMModules::kernel.createWorkUnit(node, context);  // will do code gen internally
+  // auto workUnit =
+  //     OMModules::kernel.createWorkUnit(node, context);  // will do code gen internally
 
-  while (hasMoreData()) {
-    inputData = OMModules::Data.convert(bufferFromDS, context) outputData =
-        workUnit.executeWithData(inputData, context)
+  // while (hasMoreData()) {
+  //   inputData = OMModules::Data.convert(bufferFromDS, context) outputData =
+  //       workUnit.executeWithData(inputData, context)
+  // }
+}
+
+int main(int argc, char** argv) {
+  TestHelpers::init_logger_stderr_only(argc, argv);
+  testing::InitGoogleTest(&argc, argv);
+
+  int err{0};
+  try {
+    err = RUN_ALL_TESTS();
+  } catch (const std::exception& e) {
+    LOG(ERROR) << e.what();
   }
+  return err;
 }

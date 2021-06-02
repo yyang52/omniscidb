@@ -4,6 +4,8 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 set(TEST_BASE_PATH "./tmp")
 add_definitions("-DBASE_PATH=\"${TEST_BASE_PATH}\"")
 
+set (CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -ldl")
+
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/Udf/udf_sample.cpp DESTINATION ${CMAKE_BINARY_DIR}/Tests/Udf)
 
 add_executable(CodeGeneratorTest CodeGeneratorTest.cpp)
@@ -199,6 +201,7 @@ target_link_libraries(DiskCacheQueryTest ${THRIFT_HANDLER_TEST_LIBRARIES})
 target_link_libraries(CachingFileMgrTest gtest Logger Shared DataMgr OSDependent ${Boost_LIBRARIES} ${Folly_LIBRARIES})
 target_link_libraries(LoadTableTest ${THRIFT_HANDLER_TEST_LIBRARIES})
 target_link_libraries(JSONTest gtest Logger Shared)
+target_link_libraries(TestOModuler gtest  Logger Shared)
 
 if(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
   target_link_libraries(UdfTest gtest ${EXECUTE_TEST_LIBS})
