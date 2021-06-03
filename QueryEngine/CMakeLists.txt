@@ -121,6 +121,7 @@ set(query_engine_source_files
     WindowContext.cpp
     WindowExpressionRewrite.cpp
     WindowFunctionIR.cpp
+    OModuler.cpp
 
     Codec.h
     Execute.h

@@ -16,24 +16,27 @@
 
 #ifndef OMNISCI_OMODULER_H
 #define OMNISCI_OMODULER_H
+
 #include "RelAlgDagBuilder.cpp"
-
-class OModuler {
- public:
-  OModuler(const RelAlgDispatcher& dp): dp_(dp) {}
-
-  //TODO define input/output
-  std::shared_ptr<RelAlgNode> ast_convert(const rapidjson::Value& rels);
-  WorkUnit kernel_createWorkUnit(std::shared_ptr<RelAlgNode> node);
-  RelAlgNode data_convert();
-
- private:
-  RelAlgDispatcher dp_;
-};
 
 class WorkUnit {
  public:
-  int executeWithData(int input);
+  int executeWithData(int input){ return 0;};
 };
+
+class OModuler {
+ public:
+  OModuler(const details::RelAlgDispatcher& dp) : dp_(dp) {}
+
+  // TODO define input/output
+  std::shared_ptr<RelAlgNode> ast_convert(const rapidjson::Value& rels);
+  WorkUnit kernel_createWorkUnit(std::shared_ptr<RelAlgNode> node) { return WorkUnit(); };
+  std::shared_ptr<char> data_convert() { return nullptr; };
+
+ private:
+  details::RelAlgDispatcher dp_;
+};
+
+
 
 #endif  // OMNISCI_OMODULER_H

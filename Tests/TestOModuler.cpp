@@ -19,9 +19,12 @@
 #include "TestHelpers.h"
 #include "Logger/Logger.h"
 
+// #include "QueryEngine/OModuler.h"
+
 TEST(TestOModuler, SimpleProject) {
-  EXPECT_EQ(1, 1);
-  // OModuler oModuler();
+  // Catalog_Namespace::Catalog cat = Catalog_Namespace::Catalog();
+  // details::RelAlgDispatcher dp(cat);
+  // OModuler oModuler(dp);
   // std::shared_ptr<RelAlgNode> raPtr = oModuler.ast_convert(nullptr);
 
   // auto workUnit =
@@ -31,6 +34,7 @@ TEST(TestOModuler, SimpleProject) {
   //   inputData = OMModules::Data.convert(bufferFromDS, context) outputData =
   //       workUnit.executeWithData(inputData, context)
   // }
+  EXPECT_EQ(1, 1);
 }
 
 int main(int argc, char** argv) {
