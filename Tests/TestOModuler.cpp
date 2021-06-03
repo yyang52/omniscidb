@@ -20,6 +20,7 @@
 #include "Logger/Logger.h"
 
 // #include "QueryEngine/OModuler.h"
+#include "QueryEngine/CiderRelAlgDispatcher.h"
 
 TEST(TestOModuler, SimpleProject) {
   // Catalog_Namespace::Catalog cat = Catalog_Namespace::Catalog();
@@ -34,6 +35,11 @@ TEST(TestOModuler, SimpleProject) {
   //   inputData = OMModules::Data.convert(bufferFromDS, context) outputData =
   //       workUnit.executeWithData(inputData, context)
   // }
+
+  CiderRelAlgDispatcher patcher();
+  
+
+  
   EXPECT_EQ(1, 1);
 }
 

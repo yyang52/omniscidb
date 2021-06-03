@@ -122,6 +122,7 @@ set(query_engine_source_files
     WindowExpressionRewrite.cpp
     WindowFunctionIR.cpp
     OModuler.cpp
+    CiderRelAlgDispatcher.cpp
 
     Codec.h
     Execute.h
