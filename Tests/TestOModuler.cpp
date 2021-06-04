@@ -39,8 +39,8 @@ TEST(TestOModuler, SimpleProject) {
 
   CiderRelAlgDispatcher patcher();
 
-  auto res = CiderWorkUnit::createCiderWorkUnit(nullptr);
-  
+  auto res = CiderUnitModuler::createCiderUnitModuler(nullptr);
+
   EXPECT_EQ(1, 1);
 }
 

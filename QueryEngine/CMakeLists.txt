@@ -12,6 +12,7 @@ set(CIDER_SOURCE_FILES
     OModuler.cpp
     CiderRelAlgDispatcher.cpp
     CiderWorkUnit.cpp
+    CiderRelAlgTranslator.cpp
 )
 
 set(query_engine_source_files

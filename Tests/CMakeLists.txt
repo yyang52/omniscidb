@@ -201,7 +201,7 @@ target_link_libraries(DiskCacheQueryTest ${THRIFT_HANDLER_TEST_LIBRARIES})
 target_link_libraries(CachingFileMgrTest gtest Logger Shared DataMgr OSDependent ${Boost_LIBRARIES} ${Folly_LIBRARIES})
 target_link_libraries(LoadTableTest ${THRIFT_HANDLER_TEST_LIBRARIES})
 target_link_libraries(JSONTest gtest Logger Shared)
-target_link_libraries(TestOModuler gtest  Logger Shared CIDER)
+target_link_libraries(TestOModuler gtest  Logger Shared CIDER ${EXECUTE_TEST_LIBS})
 
 if(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
   target_link_libraries(UdfTest gtest ${EXECUTE_TEST_LIBS})

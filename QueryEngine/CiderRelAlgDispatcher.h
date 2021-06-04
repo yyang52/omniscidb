@@ -3,9 +3,9 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
-#include "RelAlgDagBuilder.h"
-#include "JsonAccessors.h"
 #include "CalciteDeserializerUtils.h"
+#include "JsonAccessors.h"
+#include "RelAlgDagBuilder.h"
 
 #include <memory>
 #include <string>
@@ -15,8 +15,9 @@
 class CiderRelAlgDispatcher {
  public:
   CiderRelAlgDispatcher() {}
-
+  // todo: we need data type.
   std::vector<std::shared_ptr<RelAlgNode>> run(const rapidjson::Value& rels);
+
  private:
   // TODO: placeholder replace Scan
 
