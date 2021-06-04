@@ -7,6 +7,13 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_
 endif()
 
 set_source_files_properties(RuntimeFunctionsCodegenWithIncludes.cpp PROPERTIES COMPILE_FLAGS -O0)
+
+set(CIDER_SOURCE_FILES 
+    OModuler.cpp
+    CiderRelAlgDispatcher.cpp
+    CiderWorkUnit.cpp
+)
+
 set(query_engine_source_files
     AggregatedColRange.cpp
     ArithmeticIR.cpp
@@ -121,8 +128,6 @@ set(query_engine_source_files
     WindowContext.cpp
     WindowExpressionRewrite.cpp
     WindowFunctionIR.cpp
-    OModuler.cpp
-    CiderRelAlgDispatcher.cpp
 
     Codec.h
     Execute.h
@@ -258,6 +263,8 @@ else()
   add_dependencies(QueryEngine QueryEngineFunctionsTargets QueryEngineTableFunctionsFactory_init)
 endif()
 
+add_library(CIDER ${CIDER_SOURCE_FILES})
+
 target_precompile_headers(QueryEngine PRIVATE
   [["QueryEngine/Execute.h"]]
 )
@@ -277,6 +284,7 @@ list(APPEND QUERY_ENGINE_LIBS ${clang_libs})
 list(APPEND QUERY_ENGINE_LIBS ${llvm_libs} ${ZLIB_LIBRARIES})
 
 target_link_libraries(QueryEngine ${QUERY_ENGINE_LIBS})
+target_link_libraries(CIDER QueryEngine)
 
 add_custom_command(
     DEPENDS cuda_mapd_rt.cu JoinHashTable/Runtime/JoinHashTableQueryRuntime.cpp GpuInitGroups.cu GroupByRuntime.cpp TopKRuntime.cpp DateTruncate.cpp DateAdd.cpp ExtractFromTime.cpp ArrayOps.cpp StringFunctions.cpp RegexpFunctions.cpp ${CMAKE_SOURCE_DIR}/Utils/ChunkIter.cpp ${CMAKE_SOURCE_DIR}/Utils/StringLike.cpp ${CMAKE_SOURCE_DIR}/Utils/Regexp.cpp ${CMAKE_CURRENT_SOURCE_DIR}/ExtensionFunctions.hpp ${CMAKE_CURRENT_SOURCE_DIR}/ExtensionFunctionsGeo.hpp  ${CMAKE_CURRENT_SOURCE_DIR}/ExtensionFunctionsTesting.hpp ${CMAKE_CURRENT_SOURCE_DIR}/TableFunctions/TableFunctions.hpp ${CMAKE_CURRENT_SOURCE_DIR}/TableFunctions/TableFunctionsTesting.hpp

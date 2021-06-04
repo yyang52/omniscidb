@@ -21,6 +21,7 @@
 
 // #include "QueryEngine/OModuler.h"
 #include "QueryEngine/CiderRelAlgDispatcher.h"
+#include "QueryEngine/CiderWorkUnit.h"
 
 TEST(TestOModuler, SimpleProject) {
   // Catalog_Namespace::Catalog cat = Catalog_Namespace::Catalog();
@@ -37,8 +38,8 @@ TEST(TestOModuler, SimpleProject) {
   // }
 
   CiderRelAlgDispatcher patcher();
-  
 
+  auto res = CiderWorkUnit::createCiderWorkUnit(nullptr);
   
   EXPECT_EQ(1, 1);
 }
