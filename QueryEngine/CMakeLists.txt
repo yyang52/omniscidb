@@ -13,6 +13,7 @@ set(CIDER_SOURCE_FILES
     CiderRelAlgDispatcher.cpp
     CiderWorkUnit.cpp
     CiderRelAlgTranslator.cpp
+    CiderCodeGenerator.cpp
 )
 
 set(query_engine_source_files
