@@ -102,306 +102,391 @@ namespace cider {
 
 }
 
+std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>>
+CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
+                          const PlanState::DeletedColumnsMap& deleted_cols_map,
+                          const RelAlgExecutionUnit& ra_exe_unit,
+                          const CompilationOptions& co,
+                          const ExecutionOptions& eo,
+                          const CudaMgr_Namespace::CudaMgr* cuda_mgr,
+                          const bool allow_lazy_fetch,
+                          std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
+                          const size_t max_groups_buffer_entry_guess,
+                          const int8_t crt_min_byte_width,
+                          const bool has_cardinality_estimation,
+                          ColumnCacheMap& column_cache,
+                          RenderInfo* render_info) {
+  auto timer = DEBUG_TIMER(__func__);
 
-// std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>>
-// CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
-//                                     const PlanState::DeletedColumnsMap& deleted_cols_map,
-//                                     const RelAlgExecutionUnit& ra_exe_unit,
-//                                     const CompilationOptions& co,
-//                                     const ExecutionOptions& eo,
-//                                     const CudaMgr_Namespace::CudaMgr* cuda_mgr,
-//                                     const bool allow_lazy_fetch,
-//                                     std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
-//                                     const size_t max_groups_buffer_entry_guess,
-//                                     const int8_t crt_min_byte_width,
-//                                     const bool has_cardinality_estimation,
-//                                     ColumnCacheMap& column_cache,
-//                                     RenderInfo* render_info,
-//                                     std::shared_ptr<CgenState> cgen_state) {
-//   auto timer = DEBUG_TIMER(__func__);
+  if (co.device_type == ExecutorDeviceType::GPU) {
+    const auto cuda_mgr = catalog_->getDataMgr().getCudaMgr();
+    if (!cuda_mgr) {
+      throw QueryMustRunOnCpu();
+    }
+  }
 
-// #ifndef NDEBUG
-//   static std::uint64_t counter = 0;
-//   ++counter;
-//   VLOG(1) << "CODEGEN #" << counter << ":";
-//   LOG(IR) << "CODEGEN #" << counter << ":";
-//   LOG(PTX) << "CODEGEN #" << counter << ":";
-//   LOG(ASM) << "CODEGEN #" << counter << ":";
-// #endif
+#ifndef NDEBUG
+  static std::uint64_t counter = 0;
+  ++counter;
+  VLOG(1) << "CODEGEN #" << counter << ":";
+  LOG(IR) << "CODEGEN #" << counter << ":";
+  LOG(PTX) << "CODEGEN #" << counter << ":";
+  LOG(ASM) << "CODEGEN #" << counter << ":";
+#endif
 
-//   nukeOldState(allow_lazy_fetch, query_infos, deleted_cols_map, &ra_exe_unit);
+  nukeOldState(allow_lazy_fetch, query_infos, deleted_cols_map, &ra_exe_unit);
 
-//   GroupByAndAggregate group_by_and_aggregate(
-//       this,
-//       co.device_type,
-//       ra_exe_unit,
-//       query_infos,
-//       row_set_mem_owner,
-//       has_cardinality_estimation ? std::optional<int64_t>(max_groups_buffer_entry_guess)
-//                                  : std::nullopt);
-//   auto query_mem_desc =
-//       group_by_and_aggregate.initQueryMemoryDescriptor(eo.allow_multifrag,
-//                                                        max_groups_buffer_entry_guess,
-//                                                        crt_min_byte_width,
-//                                                        render_info,
-//                                                        eo.output_columnar_hint);
+  GroupByAndAggregate group_by_and_aggregate(
+      this,
+      co.device_type,
+      ra_exe_unit,
+      query_infos,
+      row_set_mem_owner,
+      has_cardinality_estimation ? std::optional<int64_t>(max_groups_buffer_entry_guess)
+                                 : std::nullopt);
+  auto query_mem_desc =
+      group_by_and_aggregate.initQueryMemoryDescriptor(eo.allow_multifrag,
+                                                       max_groups_buffer_entry_guess,
+                                                       crt_min_byte_width,
+                                                       render_info,
+                                                       eo.output_columnar_hint);
 
-//   if (query_mem_desc->getQueryDescriptionType() ==
-//           QueryDescriptionType::GroupByBaselineHash &&
-//       !has_cardinality_estimation &&
-//       (!render_info || !render_info->isPotentialInSituRender()) && !eo.just_explain) {
-//     const auto col_range_info = group_by_and_aggregate.getColRangeInfo();
-//     throw CardinalityEstimationRequired(col_range_info.max - col_range_info.min);
-//   }
+  if (query_mem_desc->getQueryDescriptionType() ==
+      QueryDescriptionType::GroupByBaselineHash &&
+      !has_cardinality_estimation &&
+      (!render_info || !render_info->isPotentialInSituRender()) && !eo.just_explain) {
+    const auto col_range_info = group_by_and_aggregate.getColRangeInfo();
+    throw CardinalityEstimationRequired(col_range_info.max - col_range_info.min);
+  }
 
-//   const bool output_columnar = query_mem_desc->didOutputColumnar();
+  const bool output_columnar = query_mem_desc->didOutputColumnar();
+  const bool gpu_shared_mem_optimization =
+      is_gpu_shared_mem_supported(query_mem_desc.get(),
+                                  ra_exe_unit,
+                                  cuda_mgr,
+                                  co.device_type,
+                                  cuda_mgr ? this->blockSize() : 1,
+                                  cuda_mgr ? this->numBlocksPerMP() : 1);
+  if (gpu_shared_mem_optimization) {
+    // disable interleaved bins optimization on the GPU
+    query_mem_desc->setHasInterleavedBinsOnGpu(false);
+    LOG(DEBUG1) << "GPU shared memory is used for the " +
+                   query_mem_desc->queryDescTypeToString() + " query(" +
+                   std::to_string(get_shared_memory_size(gpu_shared_mem_optimization,
+                                                         query_mem_desc.get())) +
+                   " out of " + std::to_string(g_gpu_smem_threshold) + " bytes).";
+  }
 
-//   // Read the module template and target either CPU or GPU
-//   // by binding the stream position functions to the right implementation:
-//   // stride access for GPU, contiguous for CPU
-//   auto rt_module_copy = llvm::CloneModule(
-//       *g_rt_module.get(), cgen_state->vmap_, [](const llvm::GlobalValue* gv) {
-//         auto func = llvm::dyn_cast<llvm::Function>(gv);
-//         if (!func) {
-//           return true;
-//         }
-//         return (func->getLinkage() == llvm::GlobalValue::LinkageTypes::PrivateLinkage ||
-//                 func->getLinkage() == llvm::GlobalValue::LinkageTypes::InternalLinkage ||
-//                 CodeGenerator::alwaysCloneRuntimeFunction(func));
-//       });
-//   if (co.device_type == ExecutorDeviceType::CPU) {
-//     if (is_udf_module_present(true)) {
-//       CodeGenerator::link_udf_module(udf_cpu_module, *rt_module_copy, cgen_state.get());
-//     }
-//     if (is_rt_udf_module_present(true)) {
-//       CodeGenerator::link_udf_module(
-//           rt_udf_cpu_module, *rt_module_copy, cgen_state.get());
-//     }
-//   }
+  const GpuSharedMemoryContext gpu_smem_context(
+      get_shared_memory_size(gpu_shared_mem_optimization, query_mem_desc.get()));
 
-//   cgen_state->module_ = rt_module_copy.release();
-//   AUTOMATIC_IR_METADATA(cgen_state.get());
+  if (co.device_type == ExecutorDeviceType::GPU) {
+    const size_t num_count_distinct_descs =
+        query_mem_desc->getCountDistinctDescriptorsSize();
+    for (size_t i = 0; i < num_count_distinct_descs; i++) {
+      const auto& count_distinct_descriptor =
+          query_mem_desc->getCountDistinctDescriptor(i);
+      if (count_distinct_descriptor.impl_type_ == CountDistinctImplType::StdSet ||
+          (count_distinct_descriptor.impl_type_ != CountDistinctImplType::Invalid &&
+           !co.hoist_literals)) {
+        throw QueryMustRunOnCpu();
+      }
+    }
+  }
 
-//   auto agg_fnames =
-//       get_agg_fnames(ra_exe_unit.target_exprs, !ra_exe_unit.groupby_exprs.empty());
+  // Read the module template and target either CPU or GPU
+  // by binding the stream position functions to the right implementation:
+  // stride access for GPU, contiguous for CPU
+  auto rt_module_copy = llvm::CloneModule(
+      *g_rt_module.get(), cgen_state_->vmap_, [](const llvm::GlobalValue* gv) {
+        auto func = llvm::dyn_cast<llvm::Function>(gv);
+        if (!func) {
+          return true;
+        }
+        return (func->getLinkage() == llvm::GlobalValue::LinkageTypes::PrivateLinkage ||
+                func->getLinkage() == llvm::GlobalValue::LinkageTypes::InternalLinkage ||
+                CodeGenerator::alwaysCloneRuntimeFunction(func));
+      });
+  if (co.device_type == ExecutorDeviceType::CPU) {
+    if (is_udf_module_present(true)) {
+      CodeGenerator::link_udf_module(udf_cpu_module, *rt_module_copy, cgen_state_.get());
+    }
+    if (is_rt_udf_module_present(true)) {
+      CodeGenerator::link_udf_module(
+          rt_udf_cpu_module, *rt_module_copy, cgen_state_.get());
+    }
+  } else {
+    rt_module_copy->setDataLayout(get_gpu_data_layout());
+    rt_module_copy->setTargetTriple(get_gpu_target_triple_string());
+    if (is_udf_module_present()) {
+      CodeGenerator::link_udf_module(udf_gpu_module, *rt_module_copy, cgen_state_.get());
+    }
+    if (is_rt_udf_module_present()) {
+      CodeGenerator::link_udf_module(
+          rt_udf_gpu_module, *rt_module_copy, cgen_state_.get());
+    }
+  }
 
-//   const auto agg_slot_count = ra_exe_unit.estimator ? size_t(1) : agg_fnames.size();
+  cgen_state_->module_ = rt_module_copy.release();
+  AUTOMATIC_IR_METADATA(cgen_state_.get());
 
-//   const bool is_group_by{query_mem_desc->isGroupBy()};
-//   auto [query_func, row_func_call] = is_group_by
-//                                          ? query_group_by_template(cgen_state->module_,
-//                                                                    co.hoist_literals,
-//                                                                    *query_mem_desc,
-//                                                                    co.device_type,
-//                                                                    ra_exe_unit.scan_limit,
-//                                                                    gpu_smem_context)
-//                                          : query_template(cgen_state->module_,
-//                                                           agg_slot_count,
-//                                                           co.hoist_literals,
-//                                                           !!ra_exe_unit.estimator,
-//                                                           gpu_smem_context);
-//   bind_pos_placeholders("pos_start", true, query_func, cgen_state->module_);
-//   bind_pos_placeholders("group_buff_idx", false, query_func, cgen_state->module_);
-//   bind_pos_placeholders("pos_step", false, query_func, cgen_state->module_);
+  auto agg_fnames =
+      get_agg_fnames(ra_exe_unit.target_exprs, !ra_exe_unit.groupby_exprs.empty());
 
-//   cgen_state->query_func_ = query_func;
-//   cgen_state->row_func_call_ = row_func_call;
-//   cgen_state->query_func_entry_ir_builder_.SetInsertPoint(
-//       &query_func->getEntryBlock().front());
+  const auto agg_slot_count = ra_exe_unit.estimator ? size_t(1) : agg_fnames.size();
 
-//   // Generate the function signature and column head fetches s.t.
-//   // double indirection isn't needed in the inner loop
-//   auto& fetch_bb = query_func->front();
-//   llvm::IRBuilder<> fetch_ir_builder(&fetch_bb);
-//   fetch_ir_builder.SetInsertPoint(&*fetch_bb.begin());
-//   auto col_heads = generate_column_heads_load(ra_exe_unit.input_col_descs.size(),
-//                                               query_func->args().begin(),
-//                                               fetch_ir_builder,
-//                                               cgen_state->context_);
-//   CHECK_EQ(ra_exe_unit.input_col_descs.size(), col_heads.size());
+  const bool is_group_by{query_mem_desc->isGroupBy()};
+  auto [query_func, row_func_call] = is_group_by
+                                     ? query_group_by_template(cgen_state_->module_,
+                                                               co.hoist_literals,
+                                                               *query_mem_desc,
+                                                               co.device_type,
+                                                               ra_exe_unit.scan_limit,
+                                                               gpu_smem_context)
+                                     : query_template(cgen_state_->module_,
+                                                      agg_slot_count,
+                                                      co.hoist_literals,
+                                                      !!ra_exe_unit.estimator,
+                                                      gpu_smem_context);
+  bind_pos_placeholders("pos_start", true, query_func, cgen_state_->module_);
+  bind_pos_placeholders("group_buff_idx", false, query_func, cgen_state_->module_);
+  bind_pos_placeholders("pos_step", false, query_func, cgen_state_->module_);
 
-//   cgen_state->row_func_ = create_row_function(ra_exe_unit.input_col_descs.size(),
-//                                               is_group_by ? 0 : agg_slot_count,
-//                                               co.hoist_literals,
-//                                               cgen_state->module_,
-//                                               cgen_state->context_);
-//   CHECK(cgen_state->row_func_);
-//   cgen_state->row_func_bb_ =
-//       llvm::BasicBlock::Create(cgen_state->context_, "entry", cgen_state->row_func_);
+  cgen_state_->query_func_ = query_func;
+  cgen_state_->row_func_call_ = row_func_call;
+  cgen_state_->query_func_entry_ir_builder_.SetInsertPoint(
+      &query_func->getEntryBlock().front());
 
-//   if (g_enable_filter_function) {
-//     auto filter_func_ft =
-//         llvm::FunctionType::get(get_int_type(32, cgen_state->context_), {}, false);
-//     cgen_state->filter_func_ = llvm::Function::Create(filter_func_ft,
-//                                                       llvm::Function::ExternalLinkage,
-//                                                       "filter_func",
-//                                                       cgen_state->module_);
-//     CHECK(cgen_state->filter_func_);
-//     cgen_state->filter_func_bb_ =
-//         llvm::BasicBlock::Create(cgen_state->context_, "entry", cgen_state->filter_func_);
-//   }
+  // Generate the function signature and column head fetches s.t.
+  // double indirection isn't needed in the inner loop
+  auto& fetch_bb = query_func->front();
+  llvm::IRBuilder<> fetch_ir_builder(&fetch_bb);
+  fetch_ir_builder.SetInsertPoint(&*fetch_bb.begin());
+  auto col_heads = generate_column_heads_load(ra_exe_unit.input_col_descs.size(),
+                                              query_func->args().begin(),
+                                              fetch_ir_builder,
+                                              cgen_state_->context_);
+  CHECK_EQ(ra_exe_unit.input_col_descs.size(), col_heads.size());
 
-//   cgen_state->current_func_ = cgen_state->row_func_;
-//   cgen_state->ir_builder_.SetInsertPoint(cgen_state->row_func_bb_);
+  cgen_state_->row_func_ = create_row_function(ra_exe_unit.input_col_descs.size(),
+                                               is_group_by ? 0 : agg_slot_count,
+                                               co.hoist_literals,
+                                               cgen_state_->module_,
+                                               cgen_state_->context_);
+  CHECK(cgen_state_->row_func_);
+  cgen_state_->row_func_bb_ =
+      llvm::BasicBlock::Create(cgen_state_->context_, "entry", cgen_state_->row_func_);
 
-//   preloadFragOffsets(ra_exe_unit.input_descs, query_infos);
-//   RelAlgExecutionUnit body_execution_unit = ra_exe_unit;
-//   const auto join_loops =
-//       buildJoinLoops(body_execution_unit, co, eo, query_infos, column_cache);
+  if (g_enable_filter_function) {
+    auto filter_func_ft =
+        llvm::FunctionType::get(get_int_type(32, cgen_state_->context_), {}, false);
+    cgen_state_->filter_func_ = llvm::Function::Create(filter_func_ft,
+                                                       llvm::Function::ExternalLinkage,
+                                                       "filter_func",
+                                                       cgen_state_->module_);
+    CHECK(cgen_state_->filter_func_);
+    cgen_state_->filter_func_bb_ = llvm::BasicBlock::Create(
+        cgen_state_->context_, "entry", cgen_state_->filter_func_);
+  }
 
-//   plan_state_->allocateLocalColumnIds(ra_exe_unit.input_col_descs);
-//   const auto is_not_deleted_bb = codegenSkipDeletedOuterTableRow(ra_exe_unit, co);
-//   if (is_not_deleted_bb) {
-//     cgen_state->row_func_bb_ = is_not_deleted_bb;
-//   }
-//   if (!join_loops.empty()) {
-//     codegenJoinLoops(join_loops,
-//                      body_execution_unit,
-//                      group_by_and_aggregate,
-//                      query_func,
-//                      cgen_state->row_func_bb_,
-//                      *(query_mem_desc.get()),
-//                      co,
-//                      eo);
-//   } else {
-//     const bool can_return_error = compileBody(
-//         ra_exe_unit, group_by_and_aggregate, *query_mem_desc, co, gpu_smem_context);
-//     if (can_return_error || cgen_state->needs_error_check_ || eo.with_dynamic_watchdog ||
-//         eo.allow_runtime_query_interrupt) {
-//       createErrorCheckControlFlow(query_func,
-//                                   eo.with_dynamic_watchdog,
-//                                   eo.allow_runtime_query_interrupt,
-//                                   co.device_type,
-//                                   group_by_and_aggregate.query_infos_);
-//     }
-//   }
-//   std::vector<llvm::Value*> hoisted_literals;
+  cgen_state_->current_func_ = cgen_state_->row_func_;
+  cgen_state_->ir_builder_.SetInsertPoint(cgen_state_->row_func_bb_);
 
-//   if (co.hoist_literals) {
-//     VLOG(1) << "number of hoisted literals: "
-//             << cgen_state->query_func_literal_loads_.size()
-//             << " / literal buffer usage: " << cgen_state->getLiteralBufferUsage(0)
-//             << " bytes";
-//   }
+  preloadFragOffsets(ra_exe_unit.input_descs, query_infos);
+  RelAlgExecutionUnit body_execution_unit = ra_exe_unit;
+  const auto join_loops =
+      buildJoinLoops(body_execution_unit, co, eo, query_infos, column_cache);
 
-//   if (co.hoist_literals && !cgen_state->query_func_literal_loads_.empty()) {
-//     // we have some hoisted literals...
-//     hoisted_literals = inlineHoistedLiterals();
-//   }
+  plan_state_->allocateLocalColumnIds(ra_exe_unit.input_col_descs);
+  const auto is_not_deleted_bb = codegenSkipDeletedOuterTableRow(ra_exe_unit, co);
+  if (is_not_deleted_bb) {
+    cgen_state_->row_func_bb_ = is_not_deleted_bb;
+  }
+  if (!join_loops.empty()) {
+    codegenJoinLoops(join_loops,
+                     body_execution_unit,
+                     group_by_and_aggregate,
+                     query_func,
+                     cgen_state_->row_func_bb_,
+                     *(query_mem_desc.get()),
+                     co,
+                     eo);
+  } else {
+    const bool can_return_error = compileBody(
+        ra_exe_unit, group_by_and_aggregate, *query_mem_desc, co, gpu_smem_context);
+    if (can_return_error || cgen_state_->needs_error_check_ || eo.with_dynamic_watchdog ||
+        eo.allow_runtime_query_interrupt) {
+      createErrorCheckControlFlow(query_func,
+                                  eo.with_dynamic_watchdog,
+                                  eo.allow_runtime_query_interrupt,
+                                  co.device_type,
+                                  group_by_and_aggregate.query_infos_);
+    }
+  }
+  std::vector<llvm::Value*> hoisted_literals;
 
-//   // replace the row func placeholder call with the call to the actual row func
-//   std::vector<llvm::Value*> row_func_args;
-//   for (size_t i = 0; i < cgen_state->row_func_call_->getNumArgOperands(); ++i) {
-//     row_func_args.push_back(cgen_state->row_func_call_->getArgOperand(i));
-//   }
-//   row_func_args.insert(row_func_args.end(), col_heads.begin(), col_heads.end());
-//   row_func_args.push_back(get_arg_by_name(query_func, "join_hash_tables"));
-//   // push hoisted literals arguments, if any
-//   row_func_args.insert(
-//       row_func_args.end(), hoisted_literals.begin(), hoisted_literals.end());
-//   llvm::ReplaceInstWithInst(
-//       cgen_state->row_func_call_,
-//       llvm::CallInst::Create(cgen_state->row_func_, row_func_args, ""));
+  if (co.hoist_literals) {
+    VLOG(1) << "number of hoisted literals: "
+            << cgen_state_->query_func_literal_loads_.size()
+            << " / literal buffer usage: " << cgen_state_->getLiteralBufferUsage(0)
+            << " bytes";
+  }
 
-//   // replace the filter func placeholder call with the call to the actual filter func
-//   if (cgen_state->filter_func_) {
-//     std::vector<llvm::Value*> filter_func_args;
-//     for (auto arg_it = cgen_state->filter_func_args_.begin();
-//          arg_it != cgen_state->filter_func_args_.end();
-//          ++arg_it) {
-//       filter_func_args.push_back(arg_it->first);
-//     }
-//     llvm::ReplaceInstWithInst(
-//         cgen_state->filter_func_call_,
-//         llvm::CallInst::Create(cgen_state->filter_func_, filter_func_args, ""));
-//   }
+  if (co.hoist_literals && !cgen_state_->query_func_literal_loads_.empty()) {
+    // we have some hoisted literals...
+    hoisted_literals = inlineHoistedLiterals();
+  }
 
-//   // Aggregate
-//   plan_state_->init_agg_vals_ =
-//       init_agg_val_vec(ra_exe_unit.target_exprs, ra_exe_unit.quals, *query_mem_desc);
+  // replace the row func placeholder call with the call to the actual row func
+  std::vector<llvm::Value*> row_func_args;
+  for (size_t i = 0; i < cgen_state_->row_func_call_->getNumArgOperands(); ++i) {
+    row_func_args.push_back(cgen_state_->row_func_call_->getArgOperand(i));
+  }
+  row_func_args.insert(row_func_args.end(), col_heads.begin(), col_heads.end());
+  row_func_args.push_back(get_arg_by_name(query_func, "join_hash_tables"));
+  // push hoisted literals arguments, if any
+  row_func_args.insert(
+      row_func_args.end(), hoisted_literals.begin(), hoisted_literals.end());
+  llvm::ReplaceInstWithInst(
+      cgen_state_->row_func_call_,
+      llvm::CallInst::Create(cgen_state_->row_func_, row_func_args, ""));
 
-//   auto multifrag_query_func = cgen_state->module_->getFunction(
-//       "multifrag_query" + std::string(co.hoist_literals ? "_hoisted_literals" : ""));
-//   CHECK(multifrag_query_func);
+  // replace the filter func placeholder call with the call to the actual filter func
+  if (cgen_state_->filter_func_) {
+    std::vector<llvm::Value*> filter_func_args;
+    for (auto arg_it = cgen_state_->filter_func_args_.begin();
+         arg_it != cgen_state_->filter_func_args_.end();
+         ++arg_it) {
+      filter_func_args.push_back(arg_it->first);
+    }
+    llvm::ReplaceInstWithInst(
+        cgen_state_->filter_func_call_,
+        llvm::CallInst::Create(cgen_state_->filter_func_, filter_func_args, ""));
+  }
 
-//   bind_query(query_func,
-//              "query_stub" + std::string(co.hoist_literals ? "_hoisted_literals" : ""),
-//              multifrag_query_func,
-//              cgen_state->module_);
+  // Aggregate
+  plan_state_->init_agg_vals_ =
+      init_agg_val_vec(ra_exe_unit.target_exprs, ra_exe_unit.quals, *query_mem_desc);
 
-//   std::vector<llvm::Function*> root_funcs{query_func, cgen_state->row_func_};
-//   if (cgen_state->filter_func_) {
-//     root_funcs.push_back(cgen_state->filter_func_);
-//   }
-//   auto live_funcs = CodeGenerator::markDeadRuntimeFuncs(
-//       *cgen_state->module_, root_funcs, {multifrag_query_func});
+  /*
+   * If we have decided to use GPU shared memory (decision is not made here), then
+   * we generate proper code for extra components that it needs (buffer initialization and
+   * gpu reduction from shared memory to global memory). We then replace these functions
+   * into the already compiled query_func (replacing two placeholders, write_back_nop and
+   * init_smem_nop). The rest of the code should be as before (row_func, etc.).
+   */
+  if (gpu_smem_context.isSharedMemoryUsed()) {
+    if (query_mem_desc->getQueryDescriptionType() ==
+        QueryDescriptionType::GroupByPerfectHash) {
+      GpuSharedMemCodeBuilder gpu_smem_code(
+          cgen_state_->module_,
+          cgen_state_->context_,
+          *query_mem_desc,
+          target_exprs_to_infos(ra_exe_unit.target_exprs, *query_mem_desc),
+          plan_state_->init_agg_vals_);
+      gpu_smem_code.codegen();
+      gpu_smem_code.injectFunctionsInto(query_func);
 
-// #include "LLVMFunctionAttributesUtil.h"
-//   // Always inline the row function and the filter function.
-//   // We don't want register spills in the inner loops.
-//   // LLVM seems to correctly free up alloca instructions
-//   // in these functions even when they are inlined.
-//   mark_function_always_inline(cgen_state->row_func_);
-//   if (cgen_state->filter_func_) {
-//     mark_function_always_inline(cgen_state->filter_func_);
-//   }
+      // helper functions are used for caching purposes later
+      cgen_state_->helper_functions_.push_back(gpu_smem_code.getReductionFunction());
+      cgen_state_->helper_functions_.push_back(gpu_smem_code.getInitFunction());
+      LOG(IR) << gpu_smem_code.toString();
+    }
+  }
 
-// #ifndef NDEBUG
-//   // Add helpful metadata to the LLVM IR for debugging.
-//   AUTOMATIC_IR_METADATA_DONE();
-// #endif
+  auto multifrag_query_func = cgen_state_->module_->getFunction(
+      "multifrag_query" + std::string(co.hoist_literals ? "_hoisted_literals" : ""));
+  CHECK(multifrag_query_func);
 
-//   // Serialize the important LLVM IR functions to text for SQL EXPLAIN.
-//   std::string llvm_ir;
-//   if (eo.just_explain) {
-//     if (co.explain_type == ExecutorExplainType::Optimized) {
-// #ifdef WITH_JIT_DEBUG
-//       throw std::runtime_error(
-//           "Explain optimized not available when JIT runtime debug symbols are
-//           enabled");
-// #else
-//       // Note that we don't run the NVVM reflect pass here. Use LOG(IR) to get the
-//       // optimized IR after NVVM reflect
-//       llvm::legacy::PassManager pass_manager;
-//       cider::optimize_ir(query_func, cgen_state->module_, pass_manager, live_funcs, co);
-// #endif  // WITH_JIT_DEBUG
-//     }
-//     llvm_ir =
-//         serialize_llvm_object(multifrag_query_func) + serialize_llvm_object(query_func) +
-//         serialize_llvm_object(cgen_state->row_func_) +
-//         (cgen_state->filter_func_ ? serialize_llvm_object(cgen_state->filter_func_) : "");
+  if (co.device_type == ExecutorDeviceType::GPU && eo.allow_multifrag) {
+    insertErrorCodeChecker(
+        multifrag_query_func, co.hoist_literals, eo.allow_runtime_query_interrupt);
+  }
 
-// #ifndef NDEBUG
-//     llvm_ir += serialize_llvm_metadata_footnotes(query_func, cgen_state.get());
-// #endif
-//   }
+  bind_query(query_func,
+             "query_stub" + std::string(co.hoist_literals ? "_hoisted_literals" : ""),
+             multifrag_query_func,
+             cgen_state_->module_);
 
-//   LOG(IR) << "\n\n" << query_mem_desc->toString() << "\n";
-//   LOG(IR) << "IR for the "
-//           << (co.device_type == ExecutorDeviceType::CPU ? "CPU:\n" : "GPU:\n");
-// #ifdef NDEBUG
-//   LOG(IR) << serialize_llvm_object(query_func)
-//           << serialize_llvm_object(cgen_state->row_func_)
-//           << (cgen_state->filter_func_ ? serialize_llvm_object(cgen_state->filter_func_)
-//                                        : "")
-//           << "\nEnd of IR";
-// #else
-//   LOG(IR) << serialize_llvm_object(cgen_state->module_) << "\nEnd of IR";
-// #endif
+  std::vector<llvm::Function*> root_funcs{query_func, cgen_state_->row_func_};
+  if (cgen_state_->filter_func_) {
+    root_funcs.push_back(cgen_state_->filter_func_);
+  }
+  auto live_funcs = CodeGenerator::markDeadRuntimeFuncs(
+      *cgen_state_->module_, root_funcs, {multifrag_query_func});
 
-//   // Run some basic validation checks on the LLVM IR before code is generated below.
-//   verify_function_ir(cgen_state->row_func_);
-//   if (cgen_state->filter_func_) {
-//     verify_function_ir(cgen_state->filter_func_);
-//   }
+  // Always inline the row function and the filter function.
+  // We don't want register spills in the inner loops.
+  // LLVM seems to correctly free up alloca instructions
+  // in these functions even when they are inlined.
+  mark_function_always_inline(cgen_state_->row_func_);
+  if (cgen_state_->filter_func_) {
+    mark_function_always_inline(cgen_state_->filter_func_);
+  }
 
-//   // Generate final native code from the LLVM IR.
-//   return std::make_tuple(
-//       CompilationResult{optimizeAndCodegenCPU(
-//                             query_func, multifrag_query_func, live_funcs, co, cgen_state),
-//                         cgen_state->getLiterals(),
-//                         output_columnar,
-//                         llvm_ir,
-//                         {}},
-//       std::move(query_mem_desc));
-// }
+#ifndef NDEBUG
+  // Add helpful metadata to the LLVM IR for debugging.
+  AUTOMATIC_IR_METADATA_DONE();
+#endif
+
+  // Serialize the important LLVM IR functions to text for SQL EXPLAIN.
+  std::string llvm_ir;
+  if (eo.just_explain) {
+    if (co.explain_type == ExecutorExplainType::Optimized) {
+#ifdef WITH_JIT_DEBUG
+      throw std::runtime_error(
+          "Explain optimized not available when JIT runtime debug symbols are enabled");
+#else
+      // Note that we don't run the NVVM reflect pass here. Use LOG(IR) to get the
+      // optimized IR after NVVM reflect
+      llvm::legacy::PassManager pass_manager;
+      optimize_ir(query_func, cgen_state_->module_, pass_manager, live_funcs, co);
+#endif  // WITH_JIT_DEBUG
+    }
+    llvm_ir =
+        serialize_llvm_object(multifrag_query_func) + serialize_llvm_object(query_func) +
+        serialize_llvm_object(cgen_state_->row_func_) +
+        (cgen_state_->filter_func_ ? serialize_llvm_object(cgen_state_->filter_func_)
+                                   : "");
+
+#ifndef NDEBUG
+    llvm_ir += serialize_llvm_metadata_footnotes(query_func, cgen_state_.get());
+#endif
+  }
+
+  LOG(IR) << "\n\n" << query_mem_desc->toString() << "\n";
+  LOG(IR) << "IR for the "
+          << (co.device_type == ExecutorDeviceType::CPU ? "CPU:\n" : "GPU:\n");
+#ifdef NDEBUG
+      LOG(IR) << serialize_llvm_object(query_func)
+          << serialize_llvm_object(cgen_state_->row_func_)
+          << (cgen_state_->filter_func_ ? serialize_llvm_object(cgen_state_->filter_func_)
+                                        : "")
+          << "\nEnd of IR";
+#else
+  LOG(IR) << serialize_llvm_object(cgen_state_->module_) << "\nEnd of IR";
+#endif
+
+  // Run some basic validation checks on the LLVM IR before code is generated below.
+  verify_function_ir(cgen_state_->row_func_);
+  if (cgen_state_->filter_func_) {
+    verify_function_ir(cgen_state_->filter_func_);
+  }
+
+  // Generate final native code from the LLVM IR.
+  return std::make_tuple(
+      CompilationResult{
+          co.device_type == ExecutorDeviceType::CPU
+          ? optimizeAndCodegenCPU(query_func, multifrag_query_func, live_funcs, co)
+          : optimizeAndCodegenGPU(query_func,
+                                  multifrag_query_func,
+                                  live_funcs,
+                                  is_group_by || ra_exe_unit.estimator,
+                                  cuda_mgr,
+                                  co),
+          cgen_state_->getLiterals(),
+          output_columnar,
+          llvm_ir,
+          std::move(gpu_smem_context)},
+      std::move(query_mem_desc));
+}

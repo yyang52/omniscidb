@@ -41,6 +41,8 @@ TEST(TestOModuler, SimpleProject) {
 
   auto res = CiderUnitModuler::createCiderUnitModuler(nullptr);
 
+  std::unique_ptr<QueryMemoryDescriptor> qmd_ptr = res.compile();
+
   EXPECT_EQ(1, 1);
 }
 

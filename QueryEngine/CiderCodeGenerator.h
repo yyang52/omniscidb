@@ -42,23 +42,20 @@
 
 class CiderCodeGenerator {
  public:
-  // std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>> compileWorkUnit(
-  //     const std::vector<InputTableInfo>& query_infos,
-  //     const PlanState::DeletedColumnsMap& deleted_cols_map,
-  //     const RelAlgExecutionUnit& ra_exe_unit,
-  //     const CompilationOptions& co,
-  //     const ExecutionOptions& eo,
-  //     const CudaMgr_Namespace::CudaMgr* cuda_mgr,
-  //     const bool allow_lazy_fetch,
-  //     std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
-  //     const size_t max_groups_buffer_entry_guess,
-  //     const int8_t crt_min_byte_width,
-  //     const bool has_cardinality_estimation,
-  //     ColumnCacheMap& column_cache,
-  //     RenderInfo* render_info,
-  //     std::shared_ptr<CgenState> cgen_state);
+  std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>> compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
+                                      const PlanState::DeletedColumnsMap& deleted_cols_map,
+                                      const RelAlgExecutionUnit& ra_exe_unit,
+                                      const CompilationOptions& co,
+                                      const ExecutionOptions& eo,
+                                      const CudaMgr_Namespace::CudaMgr* cuda_mgr,
+                                      const bool allow_lazy_fetch,
+                                      std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
+                                      const size_t max_groups_buffer_entry_guess,
+                                      const int8_t crt_min_byte_width,
+                                      const bool has_cardinality_estimation,
+                                      ColumnCacheMap& column_cache,
+                                      RenderInfo* render_info)
 
-  
   std::shared_ptr<CompilationContext> getCodeFromCache(
       const CodeCacheKey& key,
       const CodeCache& cache,

@@ -308,9 +308,14 @@ CiderWorkUnit createAggregateCiderWorkUnit(
 CiderUnitModuler CiderUnitModuler::createCiderUnitModuler(std::shared_ptr<RelAlgNode> plan) {
   const auto aggregate = dynamic_cast<const RelAggregate*>(plan.get());
   bool just_explain = false;
+  const auto work_unit;
   if (aggregate) {
-    const auto work_unit = createAggregateCiderWorkUnit(
+    work_unit = createAggregateCiderWorkUnit(
         aggregate, {{}, SortAlgorithm::Default, 0, 0}, just_explain);
   }
-  return std::move(CiderUnitModuler());
+  return std::move(CiderUnitModuler(work_unit));
+}
+
+void CiderUnitModuler::createCiderUnitModuler(CiderWorkUnit worker) {
+  query_comp_desc_owned
 }
