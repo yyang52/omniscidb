@@ -219,6 +219,8 @@ class GroupByAndAggregate {
   friend class ExecutionKernel;
   friend struct TargetExprCodegen;
   friend struct TargetExprCodegenBuilder;
+  // TODO:
+  friend class CiderCodeGenerator;
 };
 
 inline int64_t extract_from_datum(const Datum datum, const SQLTypeInfo& ti) {

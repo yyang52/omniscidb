@@ -5,6 +5,11 @@
 #include "CodeGenerator.h"
 #include "CompilationContext.h"
 #include "Descriptors/QueryCompilationDescriptor.h"
+#include "Execute.h"
+#include "GpuSharedMemoryUtils.h"
+#include "LLVMFunctionAttributesUtil.h"
+#include "OutputBufferInitialization.h"
+#include "QueryTemplateGenerator.h"
 
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
@@ -42,19 +47,20 @@
 
 class CiderCodeGenerator {
  public:
-  std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>> compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
-                                      const PlanState::DeletedColumnsMap& deleted_cols_map,
-                                      const RelAlgExecutionUnit& ra_exe_unit,
-                                      const CompilationOptions& co,
-                                      const ExecutionOptions& eo,
-                                      const CudaMgr_Namespace::CudaMgr* cuda_mgr,
-                                      const bool allow_lazy_fetch,
-                                      std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
-                                      const size_t max_groups_buffer_entry_guess,
-                                      const int8_t crt_min_byte_width,
-                                      const bool has_cardinality_estimation,
-                                      ColumnCacheMap& column_cache,
-                                      RenderInfo* render_info)
+  std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>> compileWorkUnit(
+      const std::vector<InputTableInfo>& query_infos,
+      const PlanState::DeletedColumnsMap& deleted_cols_map,
+      const RelAlgExecutionUnit& ra_exe_unit,
+      const CompilationOptions& co,
+      const ExecutionOptions& eo,
+      const CudaMgr_Namespace::CudaMgr* cuda_mgr,
+      const bool allow_lazy_fetch,
+      std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
+      const size_t max_groups_buffer_entry_guess,
+      const int8_t crt_min_byte_width,
+      const bool has_cardinality_estimation,
+      ColumnCacheMap& column_cache,
+      RenderInfo* render_info);
 
   std::shared_ptr<CompilationContext> getCodeFromCache(
       const CodeCacheKey& key,
@@ -75,4 +81,8 @@ class CiderCodeGenerator {
 
  private:
   CodeCache cpu_code_cache_;
+  Catalog_Namespace::Catalog* catalog_;
+  Executor* executor_;
+  std::shared_ptr<CgenState> cgen_state_;
+  std::unique_ptr<PlanState> plan_state_;
 };

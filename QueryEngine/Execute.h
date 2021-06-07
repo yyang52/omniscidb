@@ -1150,6 +1150,7 @@ class Executor {
   friend struct TargetExprCodegenBuilder;
   friend struct TargetExprCodegen;
   friend class WindowProjectNodeContext;
+  friend class CiderCodeGenerator;
 };
 
 inline std::string get_null_check_suffix(const SQLTypeInfo& lhs_ti,

@@ -1,9 +1,9 @@
 
 #include <memory>
 
-#include "RelAlgDagBuilder.h"
 #include "CiderRelAlgExecution.h"
 #include "QueryRewrite.h"
+#include "RelAlgDagBuilder.h"
 
 struct CiderWorkUnit {
   CiderRelAlgExecutionUnit exe_unit;
@@ -17,11 +17,12 @@ struct CiderWorkUnit {
 class CiderUnitModuler {
  public:
   CiderUnitModuler(){};
-  CiderUnitModuler(CiderWorkUnit worker_unit):worker_unit_(worker_unit){};
+  // CiderUnitModuler(CiderWorkUnit* worker_unit) : worker_unit_(worker_unit){};
   static CiderUnitModuler createCiderUnitModuler(std::shared_ptr<RelAlgNode> plan);
-  static createCiderUnitModuler(CiderWorkUnit worker)
-  std::unique_ptr<QueryMemoryDescriptor> compile();
+  // static createCiderUnitModuler(CiderWorkUnit worker)
+  // std::unique_ptr<QueryMemoryDescriptor> compile();
   int executeWithData(char* inputData) { return -1; };
+
  private:
-  CiderWorkUnit worker_unit_;
+  CiderWorkUnit* worker_unit_;
 };
