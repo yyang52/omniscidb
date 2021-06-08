@@ -771,17 +771,17 @@ void nukeOldState(const bool allow_lazy_fetch,
                                  query_infos,
                                  deleted_cols_map,
                                  executor));
-
-  unsigned blockSize(Catalog_Namespace::Catalog catalog) const {
-    CHECK(catalog);
-    const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
-    if (!cuda_mgr) {
-      return 0;
-    }
-    const auto& dev_props = cuda_mgr->getAllDeviceProperties();
-    return block_size_x_ ? block_size_x_ : dev_props.front().maxThreadsPerBlock;
-  }
 };
+
+unsigned blockSize(Catalog_Namespace::Catalog* catalog) const {
+  CHECK(catalog);
+  const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
+  if (!cuda_mgr) {
+    return 0;
+  }
+  const auto& dev_props = cuda_mgr->getAllDeviceProperties();
+  return block_size_x_ ? block_size_x_ : dev_props.front().maxThreadsPerBlock;
+}
 
 }  // namespace cider_executor
 
@@ -856,7 +856,7 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
                                          cuda_mgr,
                                          co.device_type,
                                          cuda_mgr ? cider_executor::blockSize(catalog_) : 1,
-                                         cuda_mgr ? cider_executor::numBlocksPerMP() : 1);
+                                         cuda_mgr ? executor_->numBlocksPerMP() : 1);
   if (gpu_shared_mem_optimization) {
     // disable interleaved bins optimization on the GPU
     query_mem_desc->setHasInterleavedBinsOnGpu(false);
