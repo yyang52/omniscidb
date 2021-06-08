@@ -750,6 +750,297 @@ void bind_query(llvm::Function* query_func,
 }  // namespace cider
 
 namespace cider_executor {
+
+std::vector<llvm::Value*> inlineHoistedLiterals(std::shared_ptr<CgenState> cgen_state) {
+  AUTOMATIC_IR_METADATA(cgen_state.get());
+
+  std::vector<llvm::Value*> hoisted_literals;
+
+  // row_func_ is using literals whose defs have been hoisted up to the query_func_,
+  // extend row_func_ signature to include extra args to pass these literal values.
+  std::vector<llvm::Type*> row_process_arg_types;
+
+  for (llvm::Function::arg_iterator I = cgen_state->row_func_->arg_begin(),
+                                    E = cgen_state->row_func_->arg_end();
+       I != E;
+       ++I) {
+    row_process_arg_types.push_back(I->getType());
+  }
+
+  for (auto& element : cgen_state->query_func_literal_loads_) {
+    for (auto value : element.second) {
+      row_process_arg_types.push_back(value->getType());
+    }
+  }
+
+  auto ft = llvm::FunctionType::get(
+      get_int_type(32, cgen_state->context_), row_process_arg_types, false);
+  auto row_func_with_hoisted_literals =
+      llvm::Function::Create(ft,
+                             llvm::Function::ExternalLinkage,
+                             "row_func_hoisted_literals",
+                             cgen_state->row_func_->getParent());
+
+  auto row_func_arg_it = row_func_with_hoisted_literals->arg_begin();
+  for (llvm::Function::arg_iterator I = cgen_state->row_func_->arg_begin(),
+                                    E = cgen_state->row_func_->arg_end();
+       I != E;
+       ++I) {
+    if (I->hasName()) {
+      row_func_arg_it->setName(I->getName());
+    }
+    ++row_func_arg_it;
+  }
+
+  decltype(row_func_with_hoisted_literals) filter_func_with_hoisted_literals{nullptr};
+  decltype(row_func_arg_it) filter_func_arg_it{nullptr};
+  if (cgen_state->filter_func_) {
+    // filter_func_ is using literals whose defs have been hoisted up to the row_func_,
+    // extend filter_func_ signature to include extra args to pass these literal values.
+    std::vector<llvm::Type*> filter_func_arg_types;
+
+    for (llvm::Function::arg_iterator I = cgen_state->filter_func_->arg_begin(),
+                                      E = cgen_state->filter_func_->arg_end();
+         I != E;
+         ++I) {
+      filter_func_arg_types.push_back(I->getType());
+    }
+
+    for (auto& element : cgen_state->query_func_literal_loads_) {
+      for (auto value : element.second) {
+        filter_func_arg_types.push_back(value->getType());
+      }
+    }
+
+    auto ft2 = llvm::FunctionType::get(
+        get_int_type(32, cgen_state->context_), filter_func_arg_types, false);
+    filter_func_with_hoisted_literals =
+        llvm::Function::Create(ft2,
+                               llvm::Function::ExternalLinkage,
+                               "filter_func_hoisted_literals",
+                               cgen_state->filter_func_->getParent());
+
+    filter_func_arg_it = filter_func_with_hoisted_literals->arg_begin();
+    for (llvm::Function::arg_iterator I = cgen_state->filter_func_->arg_begin(),
+                                      E = cgen_state->filter_func_->arg_end();
+         I != E;
+         ++I) {
+      if (I->hasName()) {
+        filter_func_arg_it->setName(I->getName());
+      }
+      ++filter_func_arg_it;
+    }
+  }
+
+  std::unordered_map<int, std::vector<llvm::Value*>>
+      query_func_literal_loads_function_arguments,
+      query_func_literal_loads_function_arguments2;
+
+  for (auto& element : cgen_state->query_func_literal_loads_) {
+    std::vector<llvm::Value*> argument_values, argument_values2;
+
+    for (auto value : element.second) {
+      hoisted_literals.push_back(value);
+      argument_values.push_back(&*row_func_arg_it);
+      if (cgen_state->filter_func_) {
+        argument_values2.push_back(&*filter_func_arg_it);
+        cgen_state->filter_func_args_[&*row_func_arg_it] = &*filter_func_arg_it;
+      }
+      if (value->hasName()) {
+        row_func_arg_it->setName("arg_" + value->getName());
+        if (cgen_state->filter_func_) {
+          filter_func_arg_it->getContext();
+          filter_func_arg_it->setName("arg_" + value->getName());
+        }
+      }
+      ++row_func_arg_it;
+      ++filter_func_arg_it;
+    }
+
+    query_func_literal_loads_function_arguments[element.first] = argument_values;
+    query_func_literal_loads_function_arguments2[element.first] = argument_values2;
+  }
+
+  // copy the row_func function body over
+  // see
+  // https://stackoverflow.com/questions/12864106/move-function-body-avoiding-full-cloning/18751365
+  row_func_with_hoisted_literals->getBasicBlockList().splice(
+      row_func_with_hoisted_literals->begin(),
+      cgen_state->row_func_->getBasicBlockList());
+
+  // also replace row_func arguments with the arguments from row_func_hoisted_literals
+  for (llvm::Function::arg_iterator I = cgen_state->row_func_->arg_begin(),
+                                    E = cgen_state->row_func_->arg_end(),
+                                    I2 = row_func_with_hoisted_literals->arg_begin();
+       I != E;
+       ++I) {
+    I->replaceAllUsesWith(&*I2);
+    I2->takeName(&*I);
+    cgen_state->filter_func_args_.replace(&*I, &*I2);
+    ++I2;
+  }
+
+  cgen_state->row_func_ = row_func_with_hoisted_literals;
+
+  // and finally replace  literal placeholders
+  std::vector<llvm::Instruction*> placeholders;
+  std::string prefix("__placeholder__literal_");
+  for (auto it = llvm::inst_begin(row_func_with_hoisted_literals),
+            e = llvm::inst_end(row_func_with_hoisted_literals);
+       it != e;
+       ++it) {
+    if (it->hasName() && it->getName().startswith(prefix)) {
+      auto offset_and_index_entry =
+          cgen_state->row_func_hoisted_literals_.find(llvm::dyn_cast<llvm::Value>(&*it));
+      CHECK(offset_and_index_entry != cgen_state->row_func_hoisted_literals_.end());
+
+      int lit_off = offset_and_index_entry->second.offset_in_literal_buffer;
+      int lit_idx = offset_and_index_entry->second.index_of_literal_load;
+
+      it->replaceAllUsesWith(
+          query_func_literal_loads_function_arguments[lit_off][lit_idx]);
+      placeholders.push_back(&*it);
+    }
+  }
+  for (auto placeholder : placeholders) {
+    placeholder->removeFromParent();
+  }
+
+  if (cgen_state->filter_func_) {
+    // copy the filter_func function body over
+    // see
+    // https://stackoverflow.com/questions/12864106/move-function-body-avoiding-full-cloning/18751365
+    filter_func_with_hoisted_literals->getBasicBlockList().splice(
+        filter_func_with_hoisted_literals->begin(),
+        cgen_state->filter_func_->getBasicBlockList());
+
+    // also replace filter_func arguments with the arguments from
+    // filter_func_hoisted_literals
+    for (llvm::Function::arg_iterator I = cgen_state->filter_func_->arg_begin(),
+                                      E = cgen_state->filter_func_->arg_end(),
+                                      I2 = filter_func_with_hoisted_literals->arg_begin();
+         I != E;
+         ++I) {
+      I->replaceAllUsesWith(&*I2);
+      I2->takeName(&*I);
+      ++I2;
+    }
+
+    cgen_state->filter_func_ = filter_func_with_hoisted_literals;
+
+    // and finally replace  literal placeholders
+    std::vector<llvm::Instruction*> placeholders;
+    std::string prefix("__placeholder__literal_");
+    for (auto it = llvm::inst_begin(filter_func_with_hoisted_literals),
+              e = llvm::inst_end(filter_func_with_hoisted_literals);
+         it != e;
+         ++it) {
+      if (it->hasName() && it->getName().startswith(prefix)) {
+        auto offset_and_index_entry = cgen_state->row_func_hoisted_literals_.find(
+            llvm::dyn_cast<llvm::Value>(&*it));
+        CHECK(offset_and_index_entry != cgen_state->row_func_hoisted_literals_.end());
+
+        int lit_off = offset_and_index_entry->second.offset_in_literal_buffer;
+        int lit_idx = offset_and_index_entry->second.index_of_literal_load;
+
+        it->replaceAllUsesWith(
+            query_func_literal_loads_function_arguments2[lit_off][lit_idx]);
+        placeholders.push_back(&*it);
+      }
+    }
+    for (auto placeholder : placeholders) {
+      placeholder->removeFromParent();
+    }
+  }
+
+  return hoisted_literals;
+}
+
+void insertErrorCodeChecker(llvm::Function* query_func,
+                                      bool hoist_literals,
+                                      bool allow_runtime_query_interrupt,
+                                      std::shared_ptr<CgenState> cgen_state) {
+  auto query_stub_func_name =
+      "query_stub" + std::string(hoist_literals ? "_hoisted_literals" : "");
+  for (auto bb_it = query_func->begin(); bb_it != query_func->end(); ++bb_it) {
+    for (auto inst_it = bb_it->begin(); inst_it != bb_it->end(); ++inst_it) {
+      if (!llvm::isa<llvm::CallInst>(*inst_it)) {
+        continue;
+      }
+      auto& row_func_call = llvm::cast<llvm::CallInst>(*inst_it);
+      if (std::string(row_func_call.getCalledFunction()->getName()) ==
+          query_stub_func_name) {
+        auto next_inst_it = inst_it;
+        ++next_inst_it;
+        auto new_bb = bb_it->splitBasicBlock(next_inst_it);
+        auto& br_instr = bb_it->back();
+        llvm::IRBuilder<> ir_builder(&br_instr);
+        llvm::Value* err_lv = &*inst_it;
+        auto error_check_bb =
+            bb_it->splitBasicBlock(llvm::BasicBlock::iterator(br_instr), ".error_check");
+        llvm::Value* error_code_arg = nullptr;
+        auto arg_cnt = 0;
+        for (auto arg_it = query_func->arg_begin(); arg_it != query_func->arg_end();
+             arg_it++, ++arg_cnt) {
+          // since multi_frag_* func has anonymous arguments so we use arg_offset
+          // explicitly to capture "error_code" argument in the func's argument list
+          if (hoist_literals) {
+            if (arg_cnt == 9) {
+              error_code_arg = &*arg_it;
+              break;
+            }
+          } else {
+            if (arg_cnt == 8) {
+              error_code_arg = &*arg_it;
+              break;
+            }
+          }
+        }
+        CHECK(error_code_arg);
+        llvm::Value* err_code = nullptr;
+        if (allow_runtime_query_interrupt) {
+          // decide the final error code with a consideration of interrupt status
+          auto& check_interrupt_br_instr = bb_it->back();
+          auto interrupt_check_bb = llvm::BasicBlock::Create(
+              cgen_state->context_, ".interrupt_check", query_func, error_check_bb);
+          llvm::IRBuilder<> interrupt_checker_ir_builder(interrupt_check_bb);
+          auto detected_interrupt = interrupt_checker_ir_builder.CreateCall(
+              cgen_state->module_->getFunction("check_interrupt"), {});
+          auto detected_error = interrupt_checker_ir_builder.CreateCall(
+              cgen_state->module_->getFunction("get_error_code"),
+              std::vector<llvm::Value*>{error_code_arg});
+          err_code = interrupt_checker_ir_builder.CreateSelect(
+              detected_interrupt,
+              cgen_state->llInt(Executor::ERR_INTERRUPTED),
+              detected_error);
+          interrupt_checker_ir_builder.CreateBr(error_check_bb);
+          llvm::ReplaceInstWithInst(&check_interrupt_br_instr,
+                                    llvm::BranchInst::Create(interrupt_check_bb));
+          ir_builder.SetInsertPoint(&br_instr);
+        } else {
+          // uses error code returned from row_func and skip to check interrupt status
+          ir_builder.SetInsertPoint(&br_instr);
+          err_code =
+              ir_builder.CreateCall(cgen_state->module_->getFunction("get_error_code"),
+                                    std::vector<llvm::Value*>{error_code_arg});
+        }
+        err_lv = ir_builder.CreateICmp(
+            llvm::ICmpInst::ICMP_NE, err_code, cgen_state->llInt(0));
+        auto error_bb = llvm::BasicBlock::Create(
+            cgen_state->context_, ".error_exit", query_func, new_bb);
+        llvm::CallInst::Create(cgen_state->module_->getFunction("record_error_code"),
+                               std::vector<llvm::Value*>{err_code, error_code_arg},
+                               "",
+                               error_bb);
+        llvm::ReturnInst::Create(cgen_state->context_, error_bb);
+        llvm::ReplaceInstWithInst(&br_instr,
+                                  llvm::BranchInst::Create(error_bb, new_bb, err_lv));
+        break;
+      }
+    }
+  }
+}
+
 void nukeOldState(const bool allow_lazy_fetch,
                   const std::vector<InputTableInfo>& query_infos,
                   const PlanState::DeletedColumnsMap& deleted_cols_map,
@@ -757,7 +1048,7 @@ void nukeOldState(const bool allow_lazy_fetch,
                   std::shared_ptr<CiderMetrics> metrics,
                   std::shared_ptr<CgenState> cgen_state,
                   std::shared_ptr<PlanState> plan_state,
-                   Executor* executor) {
+                  Executor* executor) {
   metrics->kernel_queue_time_ms_ = 0;
   metrics->compilation_queue_time_ms_ = 0;
   const bool contains_left_deep_outer_join =
@@ -773,7 +1064,622 @@ void nukeOldState(const bool allow_lazy_fetch,
                                  executor));
 };
 
+llvm::BasicBlock* codegenSkipDeletedOuterTableRow(const RelAlgExecutionUnit& ra_exe_unit,
+                                                  const CompilationOptions& co,
+                                                  std::shared_ptr<CgenState> cgen_state,
+                                                  std::shared_ptr<PlanState> plan_state,
+                                                  Executor* executor) {
+  AUTOMATIC_IR_METADATA(cgen_state.get());
+  if (!co.filter_on_deleted_column) {
+    return nullptr;
+  }
+  CHECK(!ra_exe_unit.input_descs.empty());
+  const auto& outer_input_desc = ra_exe_unit.input_descs[0];
+  if (outer_input_desc.getSourceType() != InputSourceType::TABLE) {
+    return nullptr;
+  }
+  const auto deleted_cd =
+      plan_state->getDeletedColForTable(outer_input_desc.getTableId());
+  if (!deleted_cd) {
+    return nullptr;
+  }
+  CHECK(deleted_cd->columnType.is_boolean());
+  const auto deleted_expr =
+      makeExpr<Analyzer::ColumnVar>(deleted_cd->columnType,
+                                    outer_input_desc.getTableId(),
+                                    deleted_cd->columnId,
+                                    outer_input_desc.getNestLevel());
+  CodeGenerator code_generator(executor);
+  const auto is_deleted =
+      code_generator.toBool(code_generator.codegen(deleted_expr.get(), true, co).front());
+  const auto is_deleted_bb =
+      llvm::BasicBlock::Create(cgen_state->context_, "is_deleted", cgen_state->row_func_);
+  llvm::BasicBlock* bb = llvm::BasicBlock::Create(
+      cgen_state->context_, "is_not_deleted", cgen_state->row_func_);
+  cgen_state->ir_builder_.CreateCondBr(is_deleted, is_deleted_bb, bb);
+  cgen_state->ir_builder_.SetInsertPoint(is_deleted_bb);
+  cgen_state->ir_builder_.CreateRet(cgen_state->llInt<int32_t>(0));
+  cgen_state->ir_builder_.SetInsertPoint(bb);
+  return bb;
+};
+
+// searches for a particular variable within a specific basic block (or all if bb_name is
+// empty)
+template <typename InstType>
+llvm::Value* find_variable_in_basic_block(llvm::Function* func,
+                                          std::string bb_name,
+                                          std::string variable_name) {
+  llvm::Value* result = nullptr;
+  if (func == nullptr || variable_name.empty()) {
+    return result;
+  }
+  bool is_found = false;
+  for (auto bb_it = func->begin(); bb_it != func->end() && !is_found; ++bb_it) {
+    if (!bb_name.empty() && bb_it->getName() != bb_name) {
+      continue;
+    }
+    for (auto inst_it = bb_it->begin(); inst_it != bb_it->end(); inst_it++) {
+      if (llvm::isa<InstType>(*inst_it)) {
+        if (inst_it->getName() == variable_name) {
+          result = &*inst_it;
+          is_found = true;
+          break;
+        }
+      }
+    }
+  }
+  return result;
+}
+
+void createErrorCheckControlFlow(llvm::Function* query_func,
+                                 bool run_with_dynamic_watchdog,
+                                 bool run_with_allowing_runtime_interrupt,
+                                 ExecutorDeviceType device_type,
+                                 const std::vector<InputTableInfo>& input_table_infos,
+                                 std::shared_ptr<CgenState> cgen_state) {
+  AUTOMATIC_IR_METADATA(cgen_state.get());
+
+  // check whether the row processing was successful; currently, it can
+  // fail by running out of group by buffer slots
+
+  if (run_with_dynamic_watchdog && run_with_allowing_runtime_interrupt) {
+    // when both dynamic watchdog and runtime interrupt turns on
+    // we use dynamic watchdog
+    run_with_allowing_runtime_interrupt = false;
+  }
+
+  // TODO: remove this part, will use it???
+  // {
+  //   // disable injecting query interrupt checker if the session info is invalid
+  //   mapd_shared_lock<mapd_shared_mutex> session_read_lock(executor_session_mutex_);
+  //   if (current_query_session_.empty()) {
+  //     run_with_allowing_runtime_interrupt = false;
+  //   }
+  // }
+
+  llvm::Value* row_count = nullptr;
+  if ((run_with_dynamic_watchdog || run_with_allowing_runtime_interrupt) &&
+      device_type == ExecutorDeviceType::GPU) {
+    row_count = cider_executor::find_variable_in_basic_block<llvm::LoadInst>(
+        query_func, ".entry", "row_count");
+  }
+
+  bool done_splitting = false;
+  for (auto bb_it = query_func->begin(); bb_it != query_func->end() && !done_splitting;
+       ++bb_it) {
+    llvm::Value* pos = nullptr;
+    for (auto inst_it = bb_it->begin(); inst_it != bb_it->end(); ++inst_it) {
+      if ((run_with_dynamic_watchdog || run_with_allowing_runtime_interrupt) &&
+          llvm::isa<llvm::PHINode>(*inst_it)) {
+        if (inst_it->getName() == "pos") {
+          pos = &*inst_it;
+        }
+        continue;
+      }
+      if (!llvm::isa<llvm::CallInst>(*inst_it)) {
+        continue;
+      }
+      auto& row_func_call = llvm::cast<llvm::CallInst>(*inst_it);
+      if (std::string(row_func_call.getCalledFunction()->getName()) == "row_process") {
+        auto next_inst_it = inst_it;
+        ++next_inst_it;
+        auto new_bb = bb_it->splitBasicBlock(next_inst_it);
+        auto& br_instr = bb_it->back();
+        llvm::IRBuilder<> ir_builder(&br_instr);
+        llvm::Value* err_lv = &*inst_it;
+        llvm::Value* err_lv_returned_from_row_func = nullptr;
+        if (run_with_dynamic_watchdog) {
+          CHECK(pos);
+          llvm::Value* call_watchdog_lv = nullptr;
+          if (device_type == ExecutorDeviceType::GPU) {
+            // In order to make sure all threads within a block see the same barrier,
+            // only those blocks whose none of their threads have experienced the critical
+            // edge will go through the dynamic watchdog computation
+            CHECK(row_count);
+            llvm::Value* crit_edge_rem = nullptr;
+            // auto crit_edge_rem =
+            // TODO: cheng will change blockSize() method;
+            // (blockSize() & (blockSize() - 1))
+            //     ? ir_builder.CreateSRem(
+            //           row_count,
+            //           cgen_state->llInt(static_cast<int64_t>(blockSize())))
+            //     : ir_builder.CreateAnd(
+            //           row_count,
+            //           cgen_state->llInt(static_cast<int64_t>(blockSize() - 1)));
+            auto crit_edge_threshold = ir_builder.CreateSub(row_count, crit_edge_rem);
+            crit_edge_threshold->setName("crit_edge_threshold");
+
+            // only those threads where pos < crit_edge_threshold go through dynamic
+            // watchdog call
+            call_watchdog_lv =
+                ir_builder.CreateICmp(llvm::ICmpInst::ICMP_SLT, pos, crit_edge_threshold);
+          } else {
+            // CPU path: run watchdog for every 64th row
+            auto dw_predicate = ir_builder.CreateAnd(pos, uint64_t(0x3f));
+            call_watchdog_lv = ir_builder.CreateICmp(
+                llvm::ICmpInst::ICMP_EQ, dw_predicate, cgen_state->llInt(int64_t(0LL)));
+          }
+          CHECK(call_watchdog_lv);
+          auto error_check_bb = bb_it->splitBasicBlock(
+              llvm::BasicBlock::iterator(br_instr), ".error_check");
+          auto& watchdog_br_instr = bb_it->back();
+
+          auto watchdog_check_bb = llvm::BasicBlock::Create(
+              cgen_state->context_, ".watchdog_check", query_func, error_check_bb);
+          llvm::IRBuilder<> watchdog_ir_builder(watchdog_check_bb);
+          auto detected_timeout = watchdog_ir_builder.CreateCall(
+              cgen_state->module_->getFunction("dynamic_watchdog"), {});
+          auto timeout_err_lv = watchdog_ir_builder.CreateSelect(
+              detected_timeout, cgen_state->llInt(Executor::ERR_OUT_OF_TIME), err_lv);
+          watchdog_ir_builder.CreateBr(error_check_bb);
+
+          llvm::ReplaceInstWithInst(
+              &watchdog_br_instr,
+              llvm::BranchInst::Create(
+                  watchdog_check_bb, error_check_bb, call_watchdog_lv));
+          ir_builder.SetInsertPoint(&br_instr);
+          auto unified_err_lv = ir_builder.CreatePHI(err_lv->getType(), 2);
+
+          unified_err_lv->addIncoming(timeout_err_lv, watchdog_check_bb);
+          unified_err_lv->addIncoming(err_lv, &*bb_it);
+          err_lv = unified_err_lv;
+        } else if (run_with_allowing_runtime_interrupt) {
+          CHECK(pos);
+          llvm::Value* call_check_interrupt_lv = nullptr;
+          if (device_type == ExecutorDeviceType::GPU) {
+            // approximate how many times the %pos variable
+            // is increased --> the number of iteration
+            // here we calculate the # bit shift by considering grid/block/fragment sizes
+            // since if we use the fixed one (i.e., per 64-th increment)
+            // some CUDA threads cannot enter the interrupt checking block depending on
+            // the fragment size --> a thread may not take care of 64 threads if an outer
+            // table is not sufficiently large, and so cannot be interrupted
+            int32_t num_shift_by_gridDim = shared::getExpOfTwo(0);
+            int32_t num_shift_by_blockDim = shared::getExpOfTwo(0);
+            // TODO: change back once blockSize done;
+            // int32_t num_shift_by_gridDim = shared::getExpOfTwo(gridSize());
+            // int32_t num_shift_by_blockDim = shared::getExpOfTwo(blockSize());
+            int total_num_shift = num_shift_by_gridDim + num_shift_by_blockDim;
+            uint64_t interrupt_checking_freq = 32;
+            auto freq_control_knob = g_running_query_interrupt_freq;
+            CHECK_GT(freq_control_knob, 0);
+            CHECK_LE(freq_control_knob, 1.0);
+            if (!input_table_infos.empty()) {
+              const auto& outer_table_info = *input_table_infos.begin();
+              auto num_outer_table_tuples = outer_table_info.info.getNumTuples();
+              if (outer_table_info.table_id < 0) {
+                auto* rs = (*outer_table_info.info.fragments.begin()).resultSet;
+                CHECK(rs);
+                num_outer_table_tuples = rs->entryCount();
+              } else {
+                auto num_frags = outer_table_info.info.fragments.size();
+                if (num_frags > 0) {
+                  num_outer_table_tuples =
+                      outer_table_info.info.fragments.begin()->getNumTuples();
+                }
+              }
+              if (num_outer_table_tuples > 0) {
+                // gridSize * blockSize --> pos_step (idx of the next row per thread)
+                // we additionally multiply two to pos_step since the number of
+                // dispatched blocks are double of the gridSize
+                // # tuples (of fragment) / pos_step --> maximum # increment (K)
+                // also we multiply 1 / freq_control_knob to K to control the frequency
+                // So, needs to check the interrupt status more frequently? make K smaller
+                // TODO: refactor gridSize/blockSize
+                auto max_inc = uint64_t(0);
+                // floor(num_outer_table_tuples / (gridSize() * blockSize() * 2)));
+                if (max_inc < 2) {
+                  // too small `max_inc`, so this correction is necessary to make
+                  // `interrupt_checking_freq` be valid (i.e., larger than zero)
+                  max_inc = 2;
+                }
+                auto calibrated_inc = uint64_t(floor(max_inc * (1 - freq_control_knob)));
+                interrupt_checking_freq =
+                    uint64_t(pow(2, shared::getExpOfTwo(calibrated_inc)));
+                // add the coverage when interrupt_checking_freq > K
+                // if so, some threads still cannot be branched to the interrupt checker
+                // so we manually use smaller but close to the max_inc as freq
+                if (interrupt_checking_freq > max_inc) {
+                  interrupt_checking_freq = max_inc / 2;
+                }
+                if (interrupt_checking_freq < 8) {
+                  // such small freq incurs too frequent interrupt status checking,
+                  // so we fixup to the minimum freq value at some reasonable degree
+                  interrupt_checking_freq = 8;
+                }
+              }
+            }
+            VLOG(1) << "Set the running query interrupt checking frequency: "
+                    << interrupt_checking_freq;
+            // check the interrupt flag for every interrupt_checking_freq-th iteration
+            llvm::Value* pos_shifted_per_iteration =
+                ir_builder.CreateLShr(pos, cgen_state->llInt(total_num_shift));
+            auto interrupt_predicate =
+                ir_builder.CreateAnd(pos_shifted_per_iteration, interrupt_checking_freq);
+            call_check_interrupt_lv =
+                ir_builder.CreateICmp(llvm::ICmpInst::ICMP_EQ,
+                                      interrupt_predicate,
+                                      cgen_state->llInt(int64_t(0LL)));
+          } else {
+            // CPU path: run interrupt checker for every 64th row
+            auto interrupt_predicate = ir_builder.CreateAnd(pos, uint64_t(0x3f));
+            call_check_interrupt_lv =
+                ir_builder.CreateICmp(llvm::ICmpInst::ICMP_EQ,
+                                      interrupt_predicate,
+                                      cgen_state->llInt(int64_t(0LL)));
+          }
+          CHECK(call_check_interrupt_lv);
+          auto error_check_bb = bb_it->splitBasicBlock(
+              llvm::BasicBlock::iterator(br_instr), ".error_check");
+          auto& check_interrupt_br_instr = bb_it->back();
+
+          auto interrupt_check_bb = llvm::BasicBlock::Create(
+              cgen_state->context_, ".interrupt_check", query_func, error_check_bb);
+          llvm::IRBuilder<> interrupt_checker_ir_builder(interrupt_check_bb);
+          auto detected_interrupt = interrupt_checker_ir_builder.CreateCall(
+              cgen_state->module_->getFunction("check_interrupt"), {});
+          auto interrupt_err_lv = interrupt_checker_ir_builder.CreateSelect(
+              detected_interrupt, cgen_state->llInt(Executor::ERR_INTERRUPTED), err_lv);
+          interrupt_checker_ir_builder.CreateBr(error_check_bb);
+
+          llvm::ReplaceInstWithInst(
+              &check_interrupt_br_instr,
+              llvm::BranchInst::Create(
+                  interrupt_check_bb, error_check_bb, call_check_interrupt_lv));
+          ir_builder.SetInsertPoint(&br_instr);
+          auto unified_err_lv = ir_builder.CreatePHI(err_lv->getType(), 2);
+
+          unified_err_lv->addIncoming(interrupt_err_lv, interrupt_check_bb);
+          unified_err_lv->addIncoming(err_lv, &*bb_it);
+          err_lv = unified_err_lv;
+        }
+        if (!err_lv_returned_from_row_func) {
+          err_lv_returned_from_row_func = err_lv;
+        }
+        if (device_type == ExecutorDeviceType::GPU && g_enable_dynamic_watchdog) {
+          // let kernel execution finish as expected, regardless of the observed error,
+          // unless it is from the dynamic watchdog where all threads within that block
+          // return together.
+          err_lv = ir_builder.CreateICmp(llvm::ICmpInst::ICMP_EQ,
+                                         err_lv,
+                                         cgen_state->llInt(Executor::ERR_OUT_OF_TIME));
+        } else {
+          err_lv = ir_builder.CreateICmp(llvm::ICmpInst::ICMP_NE,
+                                         err_lv,
+                                         cgen_state->llInt(static_cast<int32_t>(0)));
+        }
+        auto error_bb = llvm::BasicBlock::Create(
+            cgen_state->context_, ".error_exit", query_func, new_bb);
+        const auto error_code_arg = get_arg_by_name(query_func, "error_code");
+        llvm::CallInst::Create(
+            cgen_state->module_->getFunction("record_error_code"),
+            std::vector<llvm::Value*>{err_lv_returned_from_row_func, error_code_arg},
+            "",
+            error_bb);
+        llvm::ReturnInst::Create(cgen_state->context_, error_bb);
+        llvm::ReplaceInstWithInst(&br_instr,
+                                  llvm::BranchInst::Create(error_bb, new_bb, err_lv));
+        done_splitting = true;
+        break;
+      }
+    }
+  }
+  CHECK(done_splitting);
+};
+
+llvm::Value* addJoinLoopIterator(const std::vector<llvm::Value*>& prev_iters,
+                                 const size_t level_idx,
+                                 std::shared_ptr<CgenState> cgen_state) {
+  AUTOMATIC_IR_METADATA(cgen_state.get());
+  // Iterators are added for loop-outer joins when the head of the loop is generated,
+  // then once again when the body if generated. Allow this instead of special handling
+  // of call sites.
+  const auto it = cgen_state->scan_idx_to_hash_pos_.find(level_idx);
+  if (it != cgen_state->scan_idx_to_hash_pos_.end()) {
+    return it->second;
+  }
+  CHECK(!prev_iters.empty());
+  llvm::Value* matching_row_index = prev_iters.back();
+  const auto it_ok =
+      cgen_state->scan_idx_to_hash_pos_.emplace(level_idx, matching_row_index);
+  CHECK(it_ok.second);
+  return matching_row_index;
+}
+
+void redeclareFilterFunction(std::shared_ptr<CgenState> cgen_state) {
+  if (!cgen_state->filter_func_) {
+    return;
+  }
+
+  // Loop over all the instructions used in the filter func.
+  // The filter func instructions were generated as if for row func.
+  // Remap any values used by those instructions to filter func args
+  // and remember to forward them through the call in the row func.
+  for (auto bb_it = cgen_state->filter_func_->begin();
+       bb_it != cgen_state->filter_func_->end();
+       ++bb_it) {
+    for (auto instr_it = bb_it->begin(); instr_it != bb_it->end(); ++instr_it) {
+      size_t i = 0;
+      for (auto op_it = instr_it->value_op_begin(); op_it != instr_it->value_op_end();
+           ++op_it, ++i) {
+        llvm::Value* v = *op_it;
+
+        // The last LLVM operand on a call instruction is the function to be called. Never
+        // remap it.
+        if (llvm::dyn_cast<const llvm::CallInst>(instr_it) &&
+            op_it == instr_it->value_op_end() - 1) {
+          continue;
+        }
+
+        if (auto* instr = llvm::dyn_cast<llvm::Instruction>(v);
+            instr && instr->getParent() &&
+            instr->getParent()->getParent() == cgen_state->row_func_) {
+          // Remember that this filter func arg is needed.
+          cgen_state->filter_func_args_[v] = nullptr;
+        } else if (auto* argum = llvm::dyn_cast<llvm::Argument>(v);
+                   argum && argum->getParent() == cgen_state->row_func_) {
+          // Remember that this filter func arg is needed.
+          cgen_state->filter_func_args_[v] = nullptr;
+        }
+      }
+    }
+  }
+
+  // Create filter_func2 with parameters only for those row func values that are known to
+  // be used in the filter func code.
+  std::vector<llvm::Type*> filter_func_arg_types;
+  filter_func_arg_types.reserve(cgen_state->filter_func_args_.v_.size());
+  for (auto& arg : cgen_state->filter_func_args_.v_) {
+    filter_func_arg_types.push_back(arg->getType());
+  }
+  auto ft = llvm::FunctionType::get(
+      get_int_type(32, cgen_state->context_), filter_func_arg_types, false);
+  cgen_state->filter_func_->setName("old_filter_func");
+  auto filter_func2 = llvm::Function::Create(ft,
+                                             llvm::Function::ExternalLinkage,
+                                             "filter_func",
+                                             cgen_state->filter_func_->getParent());
+  CHECK_EQ(filter_func2->arg_size(), cgen_state->filter_func_args_.v_.size());
+  auto arg_it = cgen_state->filter_func_args_.begin();
+  size_t i = 0;
+  for (llvm::Function::arg_iterator I = filter_func2->arg_begin(),
+                                    E = filter_func2->arg_end();
+       I != E;
+       ++I, ++arg_it) {
+    arg_it->second = &*I;
+    if (arg_it->first->hasName()) {
+      I->setName(arg_it->first->getName());
+    } else {
+      I->setName("extra" + std::to_string(i++));
+    }
+  }
+
+  // copy the filter_func function body over
+  // see
+  // https://stackoverflow.com/questions/12864106/move-function-body-avoiding-full-cloning/18751365
+  filter_func2->getBasicBlockList().splice(filter_func2->begin(),
+                                           cgen_state->filter_func_->getBasicBlockList());
+
+  if (cgen_state->current_func_ == cgen_state->filter_func_) {
+    cgen_state->current_func_ = filter_func2;
+  }
+  cgen_state->filter_func_ = filter_func2;
+
+  // loop over all the operands in the filter func
+  for (auto bb_it = cgen_state->filter_func_->begin();
+       bb_it != cgen_state->filter_func_->end();
+       ++bb_it) {
+    for (auto instr_it = bb_it->begin(); instr_it != bb_it->end(); ++instr_it) {
+      size_t i = 0;
+      for (auto op_it = instr_it->op_begin(); op_it != instr_it->op_end(); ++op_it, ++i) {
+        llvm::Value* v = op_it->get();
+        if (auto arg_it = cgen_state->filter_func_args_.find(v);
+            arg_it != cgen_state->filter_func_args_.end()) {
+          // replace row func value with a filter func arg
+          llvm::Use* use = &*op_it;
+          use->set(arg_it->second);
+        }
+      }
+    }
+  }
+}
+
+bool compileBody(const RelAlgExecutionUnit& ra_exe_unit,
+                 GroupByAndAggregate& group_by_and_aggregate,
+                 const QueryMemoryDescriptor& query_mem_desc,
+                 const CompilationOptions& co,
+                 const GpuSharedMemoryContext& gpu_smem_context,
+                 std::shared_ptr<CgenState> cgen_state,
+                 std::shared_ptr<PlanState> plan_state,
+                 Executor* executor) {
+  AUTOMATIC_IR_METADATA(cgen_state.get());
+
+  // Switch the code generation into a separate filter function if enabled.
+  // Note that accesses to function arguments are still codegenned from the
+  // row function's arguments, then later automatically forwarded and
+  // remapped into filter function arguments by redeclareFilterFunction().
+  cgen_state->row_func_bb_ = cgen_state->ir_builder_.GetInsertBlock();
+  llvm::Value* loop_done{nullptr};
+  // remove this member since I didn't see anyone use it.
+  // std::unique_ptr<Executor::FetchCacheAnchor> fetch_cache_anchor;
+  if (cgen_state->filter_func_) {
+    if (cgen_state->row_func_bb_->getName() == "loop_body") {
+      auto row_func_entry_bb = &cgen_state->row_func_->getEntryBlock();
+      cgen_state->ir_builder_.SetInsertPoint(row_func_entry_bb,
+                                             row_func_entry_bb->begin());
+      loop_done = cgen_state->ir_builder_.CreateAlloca(
+          get_int_type(1, cgen_state->context_), nullptr, "loop_done");
+      cgen_state->ir_builder_.SetInsertPoint(cgen_state->row_func_bb_);
+      cgen_state->ir_builder_.CreateStore(cgen_state->llBool(true), loop_done);
+    }
+    cgen_state->ir_builder_.SetInsertPoint(cgen_state->filter_func_bb_);
+    cgen_state->current_func_ = cgen_state->filter_func_;
+    // fetch_cache_anchor =
+    // std::make_unique<Executor::FetchCacheAnchor>(cgen_state.get());
+  }
+
+  // generate the code for the filter
+  std::vector<Analyzer::Expr*> primary_quals;
+  std::vector<Analyzer::Expr*> deferred_quals;
+  bool short_circuited = CodeGenerator::prioritizeQuals(
+      ra_exe_unit, primary_quals, deferred_quals, plan_state->hoisted_filters_);
+  if (short_circuited) {
+    VLOG(1) << "Prioritized " << std::to_string(primary_quals.size()) << " quals, "
+            << "short-circuited and deferred " << std::to_string(deferred_quals.size())
+            << " quals";
+  }
+  llvm::Value* filter_lv = cgen_state->llBool(true);
+  CodeGenerator code_generator(executor);
+  for (auto expr : primary_quals) {
+    // Generate the filter for primary quals
+    auto cond = code_generator.toBool(code_generator.codegen(expr, true, co).front());
+    filter_lv = cgen_state->ir_builder_.CreateAnd(filter_lv, cond);
+  }
+  CHECK(filter_lv->getType()->isIntegerTy(1));
+  llvm::BasicBlock* sc_false{nullptr};
+  if (!deferred_quals.empty()) {
+    auto sc_true = llvm::BasicBlock::Create(
+        cgen_state->context_, "sc_true", cgen_state->current_func_);
+    sc_false = llvm::BasicBlock::Create(
+        cgen_state->context_, "sc_false", cgen_state->current_func_);
+    cgen_state->ir_builder_.CreateCondBr(filter_lv, sc_true, sc_false);
+    cgen_state->ir_builder_.SetInsertPoint(sc_false);
+    if (ra_exe_unit.join_quals.empty()) {
+      cgen_state->ir_builder_.CreateRet(cgen_state->llInt(int32_t(0)));
+    }
+    cgen_state->ir_builder_.SetInsertPoint(sc_true);
+    filter_lv = cgen_state->llBool(true);
+  }
+  for (auto expr : deferred_quals) {
+    filter_lv = cgen_state->ir_builder_.CreateAnd(
+        filter_lv, code_generator.toBool(code_generator.codegen(expr, true, co).front()));
+  }
+
+  CHECK(filter_lv->getType()->isIntegerTy(1));
+  auto ret = group_by_and_aggregate.codegen(
+      filter_lv, sc_false, query_mem_desc, co, gpu_smem_context);
+
+  // Switch the code generation back to the row function if a filter
+  // function was enabled.
+  if (cgen_state->filter_func_) {
+    if (cgen_state->row_func_bb_->getName() == "loop_body") {
+      cgen_state->ir_builder_.CreateStore(cgen_state->llBool(false), loop_done);
+      cgen_state->ir_builder_.CreateRet(cgen_state->llInt<int32_t>(0));
+    }
+
+    cgen_state->ir_builder_.SetInsertPoint(cgen_state->row_func_bb_);
+    cgen_state->current_func_ = cgen_state->row_func_;
+    cgen_state->filter_func_call_ =
+        cgen_state->ir_builder_.CreateCall(cgen_state->filter_func_, {});
+
+    // Create real filter function declaration after placeholder call
+    // is emitted.
+    cider_executor::redeclareFilterFunction(cgen_state);
+
+    if (cgen_state->row_func_bb_->getName() == "loop_body") {
+      auto loop_done_true = llvm::BasicBlock::Create(
+          cgen_state->context_, "loop_done_true", cgen_state->row_func_);
+      auto loop_done_false = llvm::BasicBlock::Create(
+          cgen_state->context_, "loop_done_false", cgen_state->row_func_);
+      auto loop_done_flag = cgen_state->ir_builder_.CreateLoad(loop_done);
+      cgen_state->ir_builder_.CreateCondBr(
+          loop_done_flag, loop_done_true, loop_done_false);
+      cgen_state->ir_builder_.SetInsertPoint(loop_done_true);
+      cgen_state->ir_builder_.CreateRet(cgen_state->filter_func_call_);
+      cgen_state->ir_builder_.SetInsertPoint(loop_done_false);
+    } else {
+      cgen_state->ir_builder_.CreateRet(cgen_state->filter_func_call_);
+    }
+  }
+  return ret;
+};
+
 }  // namespace cider_executor
+
+// didn't make it in cider_executor namespace because we need call GroupByAndAggregate
+// private member, so make it a static method .
+void CiderCodeGenerator::codegenJoinLoops(const std::vector<JoinLoop>& join_loops,
+                                          const RelAlgExecutionUnit& ra_exe_unit,
+                                          GroupByAndAggregate& group_by_and_aggregate,
+                                          llvm::Function* query_func,
+                                          llvm::BasicBlock* entry_bb,
+                                          const QueryMemoryDescriptor& query_mem_desc,
+                                          const CompilationOptions& co,
+                                          const ExecutionOptions& eo,
+                                          std::shared_ptr<CgenState> cgen_state,
+                                          std::shared_ptr<PlanState> plan_state,
+                                          Executor* executor) {
+  AUTOMATIC_IR_METADATA(cgen_state.get());
+  const auto exit_bb =
+      llvm::BasicBlock::Create(cgen_state->context_, "exit", cgen_state->current_func_);
+  cgen_state->ir_builder_.SetInsertPoint(exit_bb);
+  cgen_state->ir_builder_.CreateRet(cgen_state->llInt<int32_t>(0));
+  cgen_state->ir_builder_.SetInsertPoint(entry_bb);
+  CodeGenerator code_generator(executor);
+  const auto loops_entry_bb = JoinLoop::codegen(
+      join_loops,
+      /*body_codegen=*/
+      [executor,
+       query_func,
+       &query_mem_desc,
+       &co,
+       &eo,
+       &group_by_and_aggregate,
+       &join_loops,
+       &ra_exe_unit,
+       &cgen_state,
+       &plan_state](const std::vector<llvm::Value*>& prev_iters) {
+        AUTOMATIC_IR_METADATA(cgen_state.get());
+        cider_executor::addJoinLoopIterator(prev_iters, join_loops.size(), cgen_state);
+        auto& builder = cgen_state->ir_builder_;
+        const auto loop_body_bb = llvm::BasicBlock::Create(
+            builder.getContext(), "loop_body", builder.GetInsertBlock()->getParent());
+        builder.SetInsertPoint(loop_body_bb);
+        const bool can_return_error = cider_executor::compileBody(ra_exe_unit,
+                                                                  group_by_and_aggregate,
+                                                                  query_mem_desc,
+                                                                  co,
+                                                                  {},
+                                                                  cgen_state,
+                                                                  plan_state,
+                                                                  executor);
+        if (can_return_error || cgen_state->needs_error_check_ ||
+            eo.with_dynamic_watchdog || eo.allow_runtime_query_interrupt) {
+          cider_executor::createErrorCheckControlFlow(query_func,
+                                                      eo.with_dynamic_watchdog,
+                                                      eo.allow_runtime_query_interrupt,
+                                                      co.device_type,
+                                                      group_by_and_aggregate.query_infos_,
+                                                      cgen_state);
+        }
+        return loop_body_bb;
+      },
+      /*outer_iter=*/code_generator.posArg(nullptr),
+      exit_bb,
+      cgen_state.get());
+  cgen_state->ir_builder_.SetInsertPoint(entry_bb);
+  cgen_state->ir_builder_.CreateBr(loops_entry_bb);
+};
 
 std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>>
 CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
@@ -980,34 +1886,44 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
 
   plan_state_->allocateLocalColumnIds(ra_exe_unit.input_col_descs);
   // todo: remove executor
-  const auto is_not_deleted_bb =
-      executor_->codegenSkipDeletedOuterTableRow(ra_exe_unit, co);
+  const auto is_not_deleted_bb = cider_executor::codegenSkipDeletedOuterTableRow(
+      ra_exe_unit, co, cgen_state_, plan_state_, executor_);
   if (is_not_deleted_bb) {
     cgen_state_->row_func_bb_ = is_not_deleted_bb;
   }
   if (!join_loops.empty()) {
     // todo: remove executor
-    executor_->codegenJoinLoops(join_loops,
-                                body_execution_unit,
-                                group_by_and_aggregate,
-                                query_func,
-                                cgen_state_->row_func_bb_,
-                                *(query_mem_desc.get()),
-                                co,
-                                eo);
+    CiderCodeGenerator::codegenJoinLoops(join_loops,
+                                         body_execution_unit,
+                                         group_by_and_aggregate,
+                                         query_func,
+                                         cgen_state_->row_func_bb_,
+                                         *(query_mem_desc.get()),
+                                         co,
+                                         eo,
+                                         cgen_state_,
+                                         plan_state_,
+                                         executor_);
   } else {
     // todo: remove executor
-    const bool can_return_error = executor_->compileBody(
-        ra_exe_unit, group_by_and_aggregate, *query_mem_desc, co, gpu_smem_context);
+    const bool can_return_error = cider_executor::compileBody(ra_exe_unit,
+                                                              group_by_and_aggregate,
+                                                              *query_mem_desc,
+                                                              co,
+                                                              gpu_smem_context,
+                                                              cgen_state_,
+                                                              plan_state_,
+                                                              executor_);
     if (can_return_error || cgen_state_->needs_error_check_ || eo.with_dynamic_watchdog ||
         eo.allow_runtime_query_interrupt) {
       // todo: remove executor
 
-      executor_->createErrorCheckControlFlow(query_func,
-                                             eo.with_dynamic_watchdog,
-                                             eo.allow_runtime_query_interrupt,
-                                             co.device_type,
-                                             group_by_and_aggregate.query_infos_);
+      cider_executor::createErrorCheckControlFlow(query_func,
+                                                  eo.with_dynamic_watchdog,
+                                                  eo.allow_runtime_query_interrupt,
+                                                  co.device_type,
+                                                  group_by_and_aggregate.query_infos_,
+                                                  cgen_state_);
     }
   }
   std::vector<llvm::Value*> hoisted_literals;
@@ -1021,7 +1937,7 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
 
   if (co.hoist_literals && !cgen_state_->query_func_literal_loads_.empty()) {
     // we have some hoisted literals...
-    hoisted_literals = executor_->inlineHoistedLiterals();
+    hoisted_literals = cider_executor::inlineHoistedLiterals(cgen_state_);
   }
 
   // replace the row func placeholder call with the call to the actual row func
@@ -1086,8 +2002,8 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
   CHECK(multifrag_query_func);
 
   if (co.device_type == ExecutorDeviceType::GPU && eo.allow_multifrag) {
-    executor_->insertErrorCodeChecker(
-        multifrag_query_func, co.hoist_literals, eo.allow_runtime_query_interrupt);
+    cider_executor::insertErrorCodeChecker(
+        multifrag_query_func, co.hoist_literals, eo.allow_runtime_query_interrupt, cgen_state_);
   }
 
   cider::bind_query(

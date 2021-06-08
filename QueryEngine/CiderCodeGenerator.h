@@ -25,6 +25,8 @@
 #include "OutputBufferInitialization.h"
 #include "QueryTemplateGenerator.h"
 
+#include "Shared/MathUtils.h"
+
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/ExecutionEngine/MCJIT.h>
@@ -106,6 +108,18 @@ class CiderCodeGenerator {
       const CudaMgr_Namespace::CudaMgr* cuda_mgr,
       const CompilationOptions& co,
       std::shared_ptr<CgenState> cgen_state);
+
+  static void codegenJoinLoops(const std::vector<JoinLoop>& join_loops,
+                   const RelAlgExecutionUnit& ra_exe_unit,
+                   GroupByAndAggregate& group_by_and_aggregate,
+                   llvm::Function* query_func,
+                   llvm::BasicBlock* entry_bb,
+                   const QueryMemoryDescriptor& query_mem_desc,
+                   const CompilationOptions& co,
+                   const ExecutionOptions& eo,
+                   std::shared_ptr<CgenState> cgen_state,
+                   std::shared_ptr<PlanState> plan_state,
+                   Executor* executor);
 
  private:
   CodeCache cpu_code_cache_;
