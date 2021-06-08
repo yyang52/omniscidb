@@ -39,6 +39,103 @@ std::shared_ptr<CompilationContext> CiderCodeGenerator::optimizeAndCodegenCPU(
   return cpu_compilation_context;
 }
 
+std::shared_ptr<CompilationContext> CiderCodeGenerator::optimizeAndCodegenGPU(
+    llvm::Function* query_func,
+    llvm::Function* multifrag_query_func,
+    std::unordered_set<llvm::Function*>& live_funcs,
+    const bool no_inline,
+    const CudaMgr_Namespace::CudaMgr* cuda_mgr,
+    const CompilationOptions& co,
+    std::shared_ptr<CgenState> cgen_state) {
+#ifdef HAVE_CUDA // we have some todos when enable CUDA, remember to double check!!!
+  auto module = multifrag_query_func->getParent();
+
+  CHECK(cuda_mgr);
+  CodeCacheKey key{serialize_llvm_object(query_func),
+                   serialize_llvm_object(cgen_state->row_func_)};
+  if (cgen_state->filter_func_) {
+    key.push_back(serialize_llvm_object(cgen_state->filter_func_));
+  }
+  for (const auto helper : cgen_state->helper_functions_) {
+    key.push_back(serialize_llvm_object(helper));
+  }
+  auto cached_code = getCodeFromCache(key, gpu_code_cache_, cgen_state);
+  if (cached_code) {
+    return cached_code;
+  }
+
+  bool row_func_not_inlined = false;
+  if (no_inline) {
+    for (auto it = llvm::inst_begin(cgen_state->row_func_),
+              e = llvm::inst_end(cgen_state->row_func_);
+         it != e;
+         ++it) {
+      if (llvm::isa<llvm::CallInst>(*it)) {
+        auto& get_gv_call = llvm::cast<llvm::CallInst>(*it);
+        if (get_gv_call.getCalledFunction()->getName() == "array_size" ||
+            get_gv_call.getCalledFunction()->getName() == "linear_probabilistic_count") {
+          mark_function_never_inline(cgen_state->row_func_);
+          row_func_not_inlined = true;
+          break;
+        }
+      }
+    }
+  }
+
+  initializeNVPTXBackend();                                         // todo
+  CodeGenerator::GPUTarget gpu_target{nvptx_target_machine_.get(),  // todo
+                                      cuda_mgr,
+                                      exeuctor_->blockSize(),  // todo
+                                      cgen_state.get(),
+                                      row_func_not_inlined};
+  std::shared_ptr<GpuCompilationContext> compilation_context;
+
+  if (cider::check_module_requires_libdevice(module)) {
+    if (g_rt_libdevice_module == nullptr) {  // todo
+      // raise error
+      throw std::runtime_error(
+          "libdevice library is not available but required by the UDF module");
+    }
+
+    // Bind libdevice it to the current module
+    CodeGenerator::link_udf_module(g_rt_libdevice_module,  // todo
+                                   *module,
+                                   cgen_state.get(),
+                                   llvm::Linker::Flags::OverrideFromSrc);
+
+    // activate nvvm-reflect-ftz flag on the module
+    module->addModuleFlag(llvm::Module::Override, "nvvm-reflect-ftz", (int)1);
+    for (llvm::Function& fn : *module) {
+      fn.addFnAttr("nvptx-f32ftz", "true");
+    }
+  }
+
+  try {
+    compilation_context = CodeGenerator::generateNativeGPUCode(
+        query_func, multifrag_query_func, live_funcs, co, gpu_target);
+    addCodeToCache(key, compilation_context, module, gpu_code_cache_);
+  } catch (CudaMgr_Namespace::CudaErrorException& cuda_error) {
+    if (cuda_error.getStatus() == CUDA_ERROR_OUT_OF_MEMORY) {
+      // Thrown if memory not able to be allocated on gpu
+      // Retry once after evicting portion of code cache
+      LOG(WARNING) << "Failed to allocate GPU memory for generated code. Evicting "
+                   << g_fraction_code_cache_to_evict * 100.  // todo
+                   << "% of GPU code cache and re-trying.";
+      gpu_code_cache_.evictFractionEntries(g_fraction_code_cache_to_evict);  // todo
+      compilation_context = CodeGenerator::generateNativeGPUCode(
+          query_func, multifrag_query_func, live_funcs, co, gpu_target);
+      addCodeToCache(key, compilation_context, module, gpu_code_cache_);
+    } else {
+      throw;
+    }
+  }
+  CHECK(compilation_context);
+  return compilation_context;
+#else
+  return nullptr;
+#endif
+}
+
 std::shared_ptr<CompilationContext> CiderCodeGenerator::getCodeFromCache(
     const CodeCacheKey& key,
     const CodeCache& cache,
@@ -87,6 +184,45 @@ void CiderCodeGenerator::addCodeToCache(
 
 namespace cider {
 
+#ifdef HAVE_CUDA
+
+// check if linking with libdevice is required
+// libdevice functions have a __nv_* prefix
+bool check_module_requires_libdevice(llvm::Module* module) {
+  for (llvm::Function& F : *module) {
+    if (F.hasName() && F.getName().startswith("__nv_")) {
+      LOG(INFO) << "Module requires linking with libdevice: " << std::string(F.getName());
+      return true;
+    }
+  }
+  LOG(DEBUG1) << "module does not require linking against libdevice";
+  return false;
+}
+
+// Adds the missing intrinsics declarations to the given module
+void add_intrinsics_to_module(llvm::Module* module) {
+  for (llvm::Function& F : *module) {
+    for (llvm::Instruction& I : instructions(F)) {
+      if (llvm::IntrinsicInst* ii = llvm::dyn_cast<llvm::IntrinsicInst>(&I)) {
+        if (llvm::Intrinsic::isOverloaded(ii->getIntrinsicID())) {
+          llvm::Type* Tys[] = {ii->getFunctionType()->getReturnType()};
+          llvm::Function& decl_fn =
+              *llvm::Intrinsic::getDeclaration(module, ii->getIntrinsicID(), Tys);
+          ii->setCalledFunction(&decl_fn);
+        } else {
+          // inserts the declaration into the module if not present
+          llvm::Intrinsic::getDeclaration(module, ii->getIntrinsicID());
+        }
+      }
+    }
+  }
+}
+
+#endif
+
+// These are some stateless util methods, copy from NativeCodegen.cpp.
+// We use these methods with cider:: prefix
+// todo: move to another file?
 void eliminate_dead_self_recursive_funcs(
     llvm::Module& M,
     const std::unordered_set<llvm::Function*>& live_funcs) {
@@ -631,7 +767,7 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
   LOG(ASM) << "CODEGEN #" << counter << ":";
 #endif
 
-  // nukeOldState(allow_lazy_fetch, query_infos, deleted_cols_map, &ra_exe_unit);
+  executor_->nukeOldState(allow_lazy_fetch, query_infos, deleted_cols_map, &ra_exe_unit);
 
   GroupByAndAggregate group_by_and_aggregate(
       executor_,
@@ -821,10 +957,10 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
       // todo: remove executor
 
       executor_->createErrorCheckControlFlow(query_func,
-                                            eo.with_dynamic_watchdog,
-                                            eo.allow_runtime_query_interrupt,
-                                            co.device_type,
-                                            group_by_and_aggregate.query_infos_);
+                                             eo.with_dynamic_watchdog,
+                                             eo.allow_runtime_query_interrupt,
+                                             co.device_type,
+                                             group_by_and_aggregate.query_infos_);
     }
   }
   std::vector<llvm::Value*> hoisted_literals;
@@ -982,14 +1118,17 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
   return std::make_tuple(
       CompilationResult{
           co.device_type == ExecutorDeviceType::CPU
-              ? optimizeAndCodegenCPU(query_func, multifrag_query_func, live_funcs, co, cgen_state_)
-              : optimizeAndCodegenCPU(query_func, multifrag_query_func, live_funcs, co, cgen_state_),
-              // : optimizeAndCodegenGPU(query_func,
-              //                         multifrag_query_func,
-              //                         live_funcs,
-              //                         is_group_by || ra_exe_unit.estimator,
-              //                         cuda_mgr,
-              //                         co),
+              ? optimizeAndCodegenCPU(
+                    query_func, multifrag_query_func, live_funcs, co, cgen_state_)
+              // : optimizeAndCodegenCPU(query_func, multifrag_query_func, live_funcs, co,
+              // cgen_state_),
+              : optimizeAndCodegenGPU(query_func,
+                                      multifrag_query_func,
+                                      live_funcs,
+                                      is_group_by || ra_exe_unit.estimator,
+                                      cuda_mgr,
+                                      co,
+                                      cgen_state_),
           cgen_state_->getLiterals(),
           output_columnar,
           llvm_ir,

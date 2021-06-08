@@ -79,10 +79,21 @@ class CiderCodeGenerator {
       const CompilationOptions& co,
       std::shared_ptr<CgenState> cgen_state);
 
+  std::shared_ptr<CompilationContext> optimizeAndCodegenGPU(
+      llvm::Function* query_func,
+      llvm::Function* multifrag_query_func,
+      std::unordered_set<llvm::Function*>& live_funcs,
+      const bool no_inline,
+      const CudaMgr_Namespace::CudaMgr* cuda_mgr,
+      const CompilationOptions& co,
+      std::shared_ptr<CgenState> cgen_state);
+
  private:
   CodeCache cpu_code_cache_;
+  CodeCache gpu_code_cache_;
   Catalog_Namespace::Catalog* catalog_;
   Executor* executor_;
   std::shared_ptr<CgenState> cgen_state_;
   std::unique_ptr<PlanState> plan_state_;
+
 };
