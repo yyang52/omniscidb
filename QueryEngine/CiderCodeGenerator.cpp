@@ -61,7 +61,7 @@ std::shared_ptr<CompilationContext> CiderCodeGenerator::optimizeAndCodegenGPU(
     const CudaMgr_Namespace::CudaMgr* cuda_mgr,
     const CompilationOptions& co,
     std::shared_ptr<CgenState> cgen_state) {
-#ifdef HAVE_CUDA // we have some todos when enable CUDA, remember to double check!!!
+#ifdef HAVE_CUDA  // we have some todos when enable CUDA, remember to double check!!!
   auto module = multifrag_query_func->getParent();
 
   CHECK(cuda_mgr);
@@ -749,6 +749,32 @@ void bind_query(llvm::Function* query_func,
 }
 }  // namespace cider
 
+namespace cider_executor {
+void nukeOldState(const bool allow_lazy_fetch,
+                  const std::vector<InputTableInfo>& query_infos,
+                  const PlanState::DeletedColumnsMap& deleted_cols_map,
+                  const RelAlgExecutionUnit* ra_exe_unit,
+                  std::shared_ptr<CiderMetrics> metrics,
+                  std::shared_ptr<CgenState> cgen_state,
+                  std::shared_ptr<PlanState> plan_state,
+                   Executor* executor) {
+  metrics->kernel_queue_time_ms_ = 0;
+  metrics->compilation_queue_time_ms_ = 0;
+  const bool contains_left_deep_outer_join =
+      ra_exe_unit && std::find_if(ra_exe_unit->join_quals.begin(),
+                                  ra_exe_unit->join_quals.end(),
+                                  [](const JoinCondition& join_condition) {
+                                    return join_condition.type == JoinType::LEFT;
+                                  }) != ra_exe_unit->join_quals.end();
+  cgen_state.reset(new CgenState(query_infos.size(), contains_left_deep_outer_join));
+  plan_state.reset(new PlanState(allow_lazy_fetch && !contains_left_deep_outer_join,
+                                 query_infos,
+                                 deleted_cols_map,
+                                 executor));
+};
+
+}  // namespace cider_executor
+
 std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>>
 CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
                                     const PlanState::DeletedColumnsMap& deleted_cols_map,
@@ -781,7 +807,14 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
   LOG(ASM) << "CODEGEN #" << counter << ":";
 #endif
 
-  executor_->nukeOldState(allow_lazy_fetch, query_infos, deleted_cols_map, &ra_exe_unit);
+  cider_executor::nukeOldState(allow_lazy_fetch,
+                               query_infos,
+                               deleted_cols_map,
+                               &ra_exe_unit,
+                               metrics_,
+                               cgen_state_,
+                               plan_state_,
+                               executor_);
 
   GroupByAndAggregate group_by_and_aggregate(
       executor_,

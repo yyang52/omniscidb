@@ -59,6 +59,11 @@
 
 #include <memory>
 
+struct CiderMetrics {
+  int64_t kernel_queue_time_ms_ = 0;
+  int64_t compilation_queue_time_ms_ = 0;
+};
+
 class CiderCodeGenerator {
  public:
   std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>> compileWorkUnit(
@@ -108,6 +113,7 @@ class CiderCodeGenerator {
   Catalog_Namespace::Catalog* catalog_;
   Executor* executor_;
   std::shared_ptr<CgenState> cgen_state_;
-  std::unique_ptr<PlanState> plan_state_;
+  std::shared_ptr<PlanState> plan_state_;
 
+  std::shared_ptr<CiderMetrics> metrics_;
 };
