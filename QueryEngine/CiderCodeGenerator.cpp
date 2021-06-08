@@ -751,6 +751,25 @@ void bind_query(llvm::Function* query_func,
 
 namespace cider_executor {
 
+bool g_enable_left_join_filter_hoisting{true};
+static const int32_t ERR_INTERRUPTED{10};
+
+class FetchCacheAnchor {
+ public:
+  FetchCacheAnchor(CgenState* cgen_state)
+      : cgen_state_(cgen_state), saved_fetch_cache(cgen_state_->fetch_cache_) {}
+  ~FetchCacheAnchor() { cgen_state_->fetch_cache_.swap(saved_fetch_cache); }
+
+ private:
+  CgenState* cgen_state_;
+  std::unordered_map<int, std::vector<llvm::Value*>> saved_fetch_cache;
+};
+
+struct JoinHashTableOrError {
+  std::shared_ptr<HashJoin> hash_table;
+  std::string fail_reason;
+};
+
 std::vector<llvm::Value*> inlineHoistedLiterals(std::shared_ptr<CgenState> cgen_state) {
   AUTOMATIC_IR_METADATA(cgen_state.get());
 
@@ -955,6 +974,171 @@ std::vector<llvm::Value*> inlineHoistedLiterals(std::shared_ptr<CgenState> cgen_
 
   return hoisted_literals;
 }
+
+void check_if_loop_join_is_allowed(RelAlgExecutionUnit& ra_exe_unit,
+                                   const ExecutionOptions& eo,
+                                   const std::vector<InputTableInfo>& query_infos,
+                                   const size_t level_idx,
+                                   const std::string& fail_reason) {
+  if (eo.allow_loop_joins) {
+    return;
+  }
+  if (level_idx + 1 != ra_exe_unit.join_quals.size()) {
+    throw std::runtime_error(
+        "Hash join failed, reason(s): " + fail_reason +
+        " | Cannot fall back to loop join for intermediate join quals");
+  }
+  if (!is_trivial_loop_join(query_infos, ra_exe_unit)) {
+    throw std::runtime_error(
+        "Hash join failed, reason(s): " + fail_reason +
+        " | Cannot fall back to loop join for non-trivial inner table size");
+  }
+}
+
+class ExprTableIdVisitor : public ScalarExprVisitor<std::set<int>> {
+ protected:
+  std::set<int> visitColumnVar(const Analyzer::ColumnVar* col_expr) const final {
+    return {col_expr->get_table_id()};
+  }
+
+  std::set<int> visitFunctionOper(const Analyzer::FunctionOper* func_expr) const final {
+    std::set<int> ret;
+    for (size_t i = 0; i < func_expr->getArity(); i++) {
+      ret = aggregateResult(ret, visit(func_expr->getArg(i)));
+    }
+    return ret;
+  }
+
+  std::set<int> visitBinOper(const Analyzer::BinOper* bin_oper) const final {
+    std::set<int> ret;
+    ret = aggregateResult(ret, visit(bin_oper->get_left_operand()));
+    return aggregateResult(ret, visit(bin_oper->get_right_operand()));
+  }
+
+  std::set<int> visitUOper(const Analyzer::UOper* u_oper) const final {
+    return visit(u_oper->get_operand());
+  }
+
+  std::set<int> aggregateResult(const std::set<int>& aggregate,
+                                const std::set<int>& next_result) const final {
+    auto ret = aggregate;  // copy
+    for (const auto& el : next_result) {
+      ret.insert(el);
+    }
+    return ret;
+  }
+};
+
+JoinLoop::HoistedFiltersCallback buildHoistLeftHandSideFiltersCb(
+    const RelAlgExecutionUnit& ra_exe_unit,
+    const size_t level_idx,
+    const int inner_table_id,
+    const CompilationOptions& co,
+    std::shared_ptr<CgenState> cgen_state,
+    std::shared_ptr<PlanState> plan_state,
+    Executor* executor) {
+  if (!g_enable_left_join_filter_hoisting) {
+    return nullptr;
+  }
+
+  const auto& current_level_join_conditions = ra_exe_unit.join_quals[level_idx];
+  if (current_level_join_conditions.type == JoinType::LEFT) {
+    const auto& condition = current_level_join_conditions.quals.front();
+    const auto bin_oper = dynamic_cast<const Analyzer::BinOper*>(condition.get());
+    CHECK(bin_oper) << condition->toString();
+    const auto rhs =
+        dynamic_cast<const Analyzer::ColumnVar*>(bin_oper->get_right_operand());
+    const auto lhs =
+        dynamic_cast<const Analyzer::ColumnVar*>(bin_oper->get_left_operand());
+    if (lhs && rhs && lhs->get_table_id() != rhs->get_table_id()) {
+      const Analyzer::ColumnVar* selected_lhs{nullptr};
+      // grab the left hand side column -- this is somewhat similar to normalize column
+      // pair, and a better solution may be to hoist that function out of the join
+      // framework and normalize columns at the top of build join loops
+      if (lhs->get_table_id() == inner_table_id) {
+        selected_lhs = rhs;
+      } else if (rhs->get_table_id() == inner_table_id) {
+        selected_lhs = lhs;
+      }
+      if (selected_lhs) {
+        std::list<std::shared_ptr<Analyzer::Expr>> hoisted_quals;
+        // get all LHS-only filters
+        auto should_hoist_qual = [&hoisted_quals](const auto& qual, const int table_id) {
+          CHECK(qual);
+
+          ExprTableIdVisitor visitor;
+          const auto table_ids = visitor.visit(qual.get());
+          if (table_ids.size() == 1 && table_ids.find(table_id) != table_ids.end()) {
+            hoisted_quals.push_back(qual);
+          }
+        };
+        for (const auto& qual : ra_exe_unit.simple_quals) {
+          should_hoist_qual(qual, selected_lhs->get_table_id());
+        }
+        for (const auto& qual : ra_exe_unit.quals) {
+          should_hoist_qual(qual, selected_lhs->get_table_id());
+        }
+
+        // build the filters callback and return it
+        if (!hoisted_quals.empty()) {
+          return [executor, hoisted_quals, co, plan_state](llvm::BasicBlock* true_bb,
+                                           llvm::BasicBlock* exit_bb,
+                                           const std::string& loop_name,
+                                           llvm::Function* parent_func,
+                                           CgenState* cgen_state) -> llvm::BasicBlock* {
+            // make sure we have quals to hoist
+            bool has_quals_to_hoist = false;
+            for (const auto& qual : hoisted_quals) {
+              // check to see if the filter was previously hoisted. if all filters were
+              // previously hoisted, this callback becomes a noop
+              if (plan_state->hoisted_filters_.count(qual) == 0) {
+                has_quals_to_hoist = true;
+                break;
+              }
+            }
+
+            if (!has_quals_to_hoist) {
+              return nullptr;
+            }
+
+            AUTOMATIC_IR_METADATA(cgen_state);
+
+            llvm::IRBuilder<>& builder = cgen_state->ir_builder_;
+            auto& context = builder.getContext();
+
+            const auto filter_bb =
+                llvm::BasicBlock::Create(context,
+                                         "hoisted_left_join_filters_" + loop_name,
+                                         parent_func,
+                    /*insert_before=*/true_bb);
+            builder.SetInsertPoint(filter_bb);
+
+            llvm::Value* filter_lv = cgen_state->llBool(true);
+            CodeGenerator code_generator(executor);
+            CHECK(plan_state);
+            for (const auto& qual : hoisted_quals) {
+              if (plan_state->hoisted_filters_.insert(qual).second) {
+                // qual was inserted into the hoisted filters map, which means we have not
+                // seen this qual before. Generate filter.
+                VLOG(1) << "Generating code for hoisted left hand side qualifier "
+                        << qual->toString();
+                auto cond = code_generator.toBool(
+                    code_generator.codegen(qual.get(), true, co).front());
+                filter_lv = builder.CreateAnd(filter_lv, cond);
+              }
+            }
+            CHECK(filter_lv->getType()->isIntegerTy(1));
+
+            builder.CreateCondBr(filter_lv, true_bb, exit_bb);
+            return filter_bb;
+          };
+        }
+      }
+    }
+  }
+  return nullptr;
+}
+
 
 void insertErrorCodeChecker(llvm::Function* query_func,
                                       bool hoist_literals,
@@ -1625,8 +1809,8 @@ unsigned blockSize(Catalog_Namespace::Catalog* catalog, unsigned block_size_x) {
 }
 
 unsigned numBlocksPerMP(Catalog_Namespace::Catalog* catalog, unsigned grid_size_x) {
-  CHECK(catalog_);
-  const auto cuda_mgr = catalog_->getDataMgr().getCudaMgr();
+  CHECK(catalog);
+  const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
   CHECK(cuda_mgr);
   return grid_size_x ? std::ceil(grid_size_x / cuda_mgr->getMinNumMPsForAllDevices())
                       : 2;
@@ -1662,6 +1846,378 @@ inline llvm::Value* get_arg_by_name(llvm::Function* func, const std::string& nam
   }
   CHECK(false);
   return nullptr;
+}
+
+void add_qualifier_to_execution_unit(RelAlgExecutionUnit& ra_exe_unit,
+                                     const std::shared_ptr<Analyzer::Expr>& qual) {
+  const auto qual_cf = qual_to_conjunctive_form(qual);
+  ra_exe_unit.simple_quals.insert(ra_exe_unit.simple_quals.end(),
+                                  qual_cf.simple_quals.begin(),
+                                  qual_cf.simple_quals.end());
+  ra_exe_unit.quals.insert(
+      ra_exe_unit.quals.end(), qual_cf.quals.begin(), qual_cf.quals.end());
+}
+
+void check_valid_join_qual(std::shared_ptr<Analyzer::BinOper>& bin_oper) {
+  // check whether a join qual is valid before entering the hashtable build and codegen
+
+  auto lhs_cv = dynamic_cast<const Analyzer::ColumnVar*>(bin_oper->get_left_operand());
+  auto rhs_cv = dynamic_cast<const Analyzer::ColumnVar*>(bin_oper->get_right_operand());
+  if (lhs_cv && rhs_cv && !bin_oper->is_overlaps_oper()) {
+    auto lhs_type = lhs_cv->get_type_info().get_type();
+    auto rhs_type = rhs_cv->get_type_info().get_type();
+    // check #1. avoid a join btw full array columns
+    if (lhs_type == SQLTypes::kARRAY && rhs_type == SQLTypes::kARRAY) {
+      throw std::runtime_error(
+          "Join operation between full array columns (i.e., R.arr = S.arr) instead of "
+          "indexed array columns (i.e., R.arr[1] = S.arr[2]) is not supported yet.");
+    }
+  }
+}
+
+int deviceCount(Catalog_Namespace::Catalog* catalog, const ExecutorDeviceType device_type) {
+  if (device_type == ExecutorDeviceType::GPU) {
+    const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
+    CHECK(cuda_mgr);
+    return cuda_mgr->getDeviceCount();
+  } else {
+    return 1;
+  }
+}
+
+int deviceCountForMemoryLevel(
+    Catalog_Namespace::Catalog* catalog, const Data_Namespace::MemoryLevel memory_level) {
+  return memory_level == GPU_LEVEL ? deviceCount(catalog, ExecutorDeviceType::GPU)
+                                   : deviceCount(catalog, ExecutorDeviceType::CPU);
+}
+
+JoinHashTableOrError buildHashTableForQualifier(
+    const std::shared_ptr<Analyzer::BinOper>& qual_bin_oper,
+    const std::vector<InputTableInfo>& query_infos,
+    const MemoryLevel memory_level,
+    const HashType preferred_hash_type,
+    ColumnCacheMap& column_cache,
+    const RegisteredQueryHint& query_hint,
+    Executor* executor,
+    Catalog_Namespace::Catalog* catalog) {
+  if (!g_enable_overlaps_hashjoin && qual_bin_oper->is_overlaps_oper()) {
+    return {nullptr, "Overlaps hash join disabled, attempting to fall back to loop join"};
+  }
+  if (g_enable_dynamic_watchdog) {
+    throw QueryExecutionError(ERR_INTERRUPTED);
+  }
+  try {
+    auto tbl = HashJoin::getInstance(qual_bin_oper,
+                                     query_infos,
+                                     memory_level,
+                                     preferred_hash_type,
+                                     deviceCountForMemoryLevel(catalog, memory_level),
+                                     column_cache,
+                                     executor,
+                                     query_hint);
+    return {tbl, ""};
+  } catch (const HashJoinFail& e) {
+    return {nullptr, e.what()};
+  }
+}
+
+std::shared_ptr<HashJoin> buildCurrentLevelHashTable(
+    const JoinCondition& current_level_join_conditions,
+    RelAlgExecutionUnit& ra_exe_unit,
+    const CompilationOptions& co,
+    const std::vector<InputTableInfo>& query_infos,
+    ColumnCacheMap& column_cache,
+    std::vector<std::string>& fail_reasons,
+    std::shared_ptr<CgenState> cgen_state,
+    std::shared_ptr<PlanState> plan_state,
+    Executor* executor,
+    Catalog_Namespace::Catalog* catalog) {
+  AUTOMATIC_IR_METADATA(cgen_state.get());
+  if (current_level_join_conditions.type != JoinType::INNER &&
+      current_level_join_conditions.quals.size() > 1) {
+    fail_reasons.emplace_back("No equijoin expression found for outer join");
+    return nullptr;
+  }
+  std::shared_ptr<HashJoin> current_level_hash_table;
+  for (const auto& join_qual : current_level_join_conditions.quals) {
+    auto qual_bin_oper = std::dynamic_pointer_cast<Analyzer::BinOper>(join_qual);
+    if (!qual_bin_oper || !IS_EQUIVALENCE(qual_bin_oper->get_optype())) {
+      fail_reasons.emplace_back("No equijoin expression found");
+      if (current_level_join_conditions.type == JoinType::INNER) {
+        add_qualifier_to_execution_unit(ra_exe_unit, join_qual);
+      }
+      continue;
+    }
+    check_valid_join_qual(qual_bin_oper);
+    JoinHashTableOrError hash_table_or_error;
+    if (!current_level_hash_table) {
+      hash_table_or_error = buildHashTableForQualifier(
+          qual_bin_oper,
+          query_infos,
+          co.device_type == ExecutorDeviceType::GPU ? MemoryLevel::GPU_LEVEL
+                                                    : MemoryLevel::CPU_LEVEL,
+          HashType::OneToOne,
+          column_cache,
+          ra_exe_unit.query_hint,
+          executor, catalog);
+      current_level_hash_table = hash_table_or_error.hash_table;
+    }
+    if (hash_table_or_error.hash_table) {
+      plan_state->join_info_.join_hash_tables_.push_back(hash_table_or_error.hash_table);
+      plan_state->join_info_.equi_join_tautologies_.push_back(qual_bin_oper);
+    } else {
+      fail_reasons.push_back(hash_table_or_error.fail_reason);
+      if (current_level_join_conditions.type == JoinType::INNER) {
+        add_qualifier_to_execution_unit(ra_exe_unit, qual_bin_oper);
+      }
+    }
+  }
+  return current_level_hash_table;
+}
+
+std::function<llvm::Value*(const std::vector<llvm::Value*>&, llvm::Value*)>
+  buildIsDeletedCb(const RelAlgExecutionUnit& ra_exe_unit,
+                           const size_t level_idx,
+                           const CompilationOptions& co,
+                   std::shared_ptr<CgenState> cgen_state,
+                   std::shared_ptr<PlanState> plan_state,
+                 Executor* executor) {
+  AUTOMATIC_IR_METADATA(cgen_state.get());
+  if (!co.filter_on_deleted_column) {
+    return nullptr;
+  }
+  CHECK_LT(level_idx + 1, ra_exe_unit.input_descs.size());
+  const auto input_desc = ra_exe_unit.input_descs[level_idx + 1];
+  if (input_desc.getSourceType() != InputSourceType::TABLE) {
+    return nullptr;
+  }
+
+  const auto deleted_cd = plan_state->getDeletedColForTable(input_desc.getTableId());
+  if (!deleted_cd) {
+    return nullptr;
+  }
+  CHECK(deleted_cd->columnType.is_boolean());
+  const auto deleted_expr = makeExpr<Analyzer::ColumnVar>(deleted_cd->columnType,
+                                                          input_desc.getTableId(),
+                                                          deleted_cd->columnId,
+                                                          input_desc.getNestLevel());
+  return [executor, deleted_expr, level_idx, &co, cgen_state](const std::vector<llvm::Value*>& prev_iters,
+                                              llvm::Value* have_more_inner_rows) {
+    const auto matching_row_index = addJoinLoopIterator(prev_iters, level_idx + 1, cgen_state);
+    // Avoid fetching the deleted column from a position which is not valid.
+    // An invalid position can be returned by a one to one hash lookup (negative)
+    // or at the end of iteration over a set of matching values.
+    llvm::Value* is_valid_it{nullptr};
+    if (have_more_inner_rows) {
+      is_valid_it = have_more_inner_rows;
+    } else {
+      is_valid_it = cgen_state->ir_builder_.CreateICmp(
+          llvm::ICmpInst::ICMP_SGE, matching_row_index, cgen_state->llInt<int64_t>(0));
+    }
+    const auto it_valid_bb = llvm::BasicBlock::Create(
+        cgen_state->context_, "it_valid", cgen_state->current_func_);
+    const auto it_not_valid_bb = llvm::BasicBlock::Create(
+        cgen_state->context_, "it_not_valid", cgen_state->current_func_);
+    cgen_state->ir_builder_.CreateCondBr(is_valid_it, it_valid_bb, it_not_valid_bb);
+    const auto row_is_deleted_bb = llvm::BasicBlock::Create(
+        cgen_state->context_, "row_is_deleted", cgen_state->current_func_);
+    cgen_state->ir_builder_.SetInsertPoint(it_valid_bb);
+    CodeGenerator code_generator(executor);
+    const auto row_is_deleted = code_generator.toBool(
+        code_generator.codegen(deleted_expr.get(), true, co).front());
+    cgen_state->ir_builder_.CreateBr(row_is_deleted_bb);
+    cgen_state->ir_builder_.SetInsertPoint(it_not_valid_bb);
+    const auto row_is_deleted_default = cgen_state->llBool(false);
+    cgen_state->ir_builder_.CreateBr(row_is_deleted_bb);
+    cgen_state->ir_builder_.SetInsertPoint(row_is_deleted_bb);
+    auto row_is_deleted_or_default =
+        cgen_state->ir_builder_.CreatePHI(row_is_deleted->getType(), 2);
+    row_is_deleted_or_default->addIncoming(row_is_deleted, it_valid_bb);
+    row_is_deleted_or_default->addIncoming(row_is_deleted_default, it_not_valid_bb);
+    return row_is_deleted_or_default;
+  };
+}
+
+std::vector<JoinLoop> buildJoinLoops(
+    RelAlgExecutionUnit& ra_exe_unit,
+    const CompilationOptions& co,
+    const ExecutionOptions& eo,
+    const std::vector<InputTableInfo>& query_infos,
+    ColumnCacheMap& column_cache,
+    Executor* executor,
+    std::shared_ptr<CgenState> cgen_state,
+    std::shared_ptr<PlanState> plan_state,
+    Catalog_Namespace::Catalog* catalog) {
+  INJECT_TIMER(buildJoinLoops);
+  AUTOMATIC_IR_METADATA(cgen_state.get());
+  std::vector<JoinLoop> join_loops;
+  for (size_t level_idx = 0, current_hash_table_idx = 0;
+       level_idx < ra_exe_unit.join_quals.size();
+       ++level_idx) {
+    const auto& current_level_join_conditions = ra_exe_unit.join_quals[level_idx];
+    std::vector<std::string> fail_reasons;
+    const auto build_cur_level_hash_table = [&]() {
+      if (current_level_join_conditions.quals.size() > 1) {
+        const auto first_qual = *current_level_join_conditions.quals.begin();
+        auto qual_bin_oper =
+            std::dynamic_pointer_cast<const Analyzer::BinOper>(first_qual);
+        if (qual_bin_oper && qual_bin_oper->is_overlaps_oper() &&
+            current_level_join_conditions.type == JoinType::LEFT) {
+          JoinCondition join_condition{{first_qual}, current_level_join_conditions.type};
+
+          return buildCurrentLevelHashTable(
+              join_condition, ra_exe_unit, co, query_infos, column_cache, fail_reasons, cgen_state, plan_state, executor, catalog);
+        }
+      }
+      return buildCurrentLevelHashTable(current_level_join_conditions,
+                                        ra_exe_unit,
+                                        co,
+                                        query_infos,
+                                        column_cache,
+                                        fail_reasons,
+                                        cgen_state,
+                                        plan_state,
+                                        executor, catalog);
+    };
+    const auto current_level_hash_table = build_cur_level_hash_table();
+    const auto found_outer_join_matches_cb =
+        [executor, level_idx, cgen_state](llvm::Value* found_outer_join_matches) {
+          CHECK_LT(level_idx, cgen_state->outer_join_match_found_per_level_.size());
+          CHECK(!cgen_state->outer_join_match_found_per_level_[level_idx]);
+          cgen_state->outer_join_match_found_per_level_[level_idx] =
+              found_outer_join_matches;
+        };
+    const auto is_deleted_cb = buildIsDeletedCb(ra_exe_unit, level_idx, co, cgen_state, plan_state, executor);
+    const auto outer_join_condition_multi_quals_cb =
+        [executor, level_idx, &co, &current_level_join_conditions, cgen_state](
+            const std::vector<llvm::Value*>& prev_iters) {
+          // The values generated for the match path don't dominate all uses
+          // since on the non-match path nulls are generated. Reset the cache
+          // once the condition is generated to avoid incorrect reuse.
+          FetchCacheAnchor anchor(cgen_state.get());
+          addJoinLoopIterator(prev_iters, level_idx + 1, cgen_state);
+          llvm::Value* left_join_cond = cgen_state->llBool(true);
+          CodeGenerator code_generator(executor);
+          // Do not want to look at all quals! only 1..N quals (ignore first qual)
+          // Note(jclay): this may need to support cases larger than 2
+          // are there any?
+          if (current_level_join_conditions.quals.size() >= 2) {
+            auto qual_it = std::next(current_level_join_conditions.quals.begin(), 1);
+            for (; qual_it != current_level_join_conditions.quals.end();
+                   std::advance(qual_it, 1)) {
+              left_join_cond = cgen_state->ir_builder_.CreateAnd(
+                  left_join_cond,
+                  code_generator.toBool(
+                      code_generator.codegen(qual_it->get(), true, co).front()));
+            }
+          }
+          return left_join_cond;
+        };
+    if (current_level_hash_table) {
+      const auto hoisted_filters_cb = buildHoistLeftHandSideFiltersCb(
+          ra_exe_unit, level_idx, current_level_hash_table->getInnerTableId(), co, cgen_state, plan_state, executor);
+      if (current_level_hash_table->getHashType() == HashType::OneToOne) {
+        join_loops.emplace_back(
+            /*kind=*/JoinLoopKind::Singleton,
+            /*type=*/current_level_join_conditions.type,
+            /*iteration_domain_codegen=*/
+                     [executor, current_hash_table_idx, level_idx, current_level_hash_table, &co, cgen_state](
+                         const std::vector<llvm::Value*>& prev_iters) {
+                       addJoinLoopIterator(prev_iters, level_idx, cgen_state);
+                       JoinLoopDomain domain{{0}};
+                       domain.slot_lookup_result =
+                           current_level_hash_table->codegenSlot(co, current_hash_table_idx);
+                       return domain;
+                     },
+            /*outer_condition_match=*/nullptr,
+            /*found_outer_matches=*/current_level_join_conditions.type == JoinType::LEFT
+                                    ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
+                                    : nullptr,
+            /*hoisted_filters=*/hoisted_filters_cb,
+            /*is_deleted=*/is_deleted_cb);
+      } else {
+        join_loops.emplace_back(
+            /*kind=*/JoinLoopKind::Set,
+            /*type=*/current_level_join_conditions.type,
+            /*iteration_domain_codegen=*/
+                     [executor, current_hash_table_idx, level_idx, current_level_hash_table, &co, cgen_state](
+                         const std::vector<llvm::Value*>& prev_iters) {
+                       addJoinLoopIterator(prev_iters, level_idx, cgen_state);
+                       JoinLoopDomain domain{{0}};
+                       const auto matching_set = current_level_hash_table->codegenMatchingSet(
+                           co, current_hash_table_idx);
+                       domain.values_buffer = matching_set.elements;
+                       domain.element_count = matching_set.count;
+                       return domain;
+                     },
+            /*outer_condition_match=*/
+                     current_level_join_conditions.type == JoinType::LEFT
+                     ? std::function<llvm::Value*(const std::vector<llvm::Value*>&)>(
+                         outer_join_condition_multi_quals_cb)
+                     : nullptr,
+            /*found_outer_matches=*/current_level_join_conditions.type == JoinType::LEFT
+                                    ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
+                                    : nullptr,
+            /*hoisted_filters=*/hoisted_filters_cb,
+            /*is_deleted=*/is_deleted_cb);
+      }
+      ++current_hash_table_idx;
+    } else {
+      const auto fail_reasons_str = current_level_join_conditions.quals.empty()
+                                    ? "No equijoin expression found"
+                                    : boost::algorithm::join(fail_reasons, " | ");
+      check_if_loop_join_is_allowed(
+          ra_exe_unit, eo, query_infos, level_idx, fail_reasons_str);
+      // Callback provided to the `JoinLoop` framework to evaluate the (outer) join
+      // condition.
+      VLOG(1) << "Unable to build hash table, falling back to loop join: "
+              << fail_reasons_str;
+      const auto outer_join_condition_cb =
+          [executor, level_idx, &co, &current_level_join_conditions, cgen_state](
+              const std::vector<llvm::Value*>& prev_iters) {
+            // The values generated for the match path don't dominate all uses
+            // since on the non-match path nulls are generated. Reset the cache
+            // once the condition is generated to avoid incorrect reuse.
+            FetchCacheAnchor anchor(cgen_state.get());
+            addJoinLoopIterator(prev_iters, level_idx + 1, cgen_state);
+            llvm::Value* left_join_cond = cgen_state->llBool(true);
+            CodeGenerator code_generator(executor);
+            for (auto expr : current_level_join_conditions.quals) {
+              left_join_cond = cgen_state->ir_builder_.CreateAnd(
+                  left_join_cond,
+                  code_generator.toBool(
+                      code_generator.codegen(expr.get(), true, co).front()));
+            }
+            return left_join_cond;
+          };
+      join_loops.emplace_back(
+          /*kind=*/JoinLoopKind::UpperBound,
+          /*type=*/current_level_join_conditions.type,
+          /*iteration_domain_codegen=*/
+                   [executor, level_idx, cgen_state](const std::vector<llvm::Value*>& prev_iters) {
+                     addJoinLoopIterator(prev_iters, level_idx, cgen_state);
+                     JoinLoopDomain domain{{0}};
+                     const auto rows_per_scan_ptr = cgen_state->ir_builder_.CreateGEP(
+                         get_arg_by_name(cgen_state->row_func_, "num_rows_per_scan"),
+                         cgen_state->llInt(int32_t(level_idx + 1)));
+                     domain.upper_bound = cgen_state->ir_builder_.CreateLoad(rows_per_scan_ptr,
+                                                                              "num_rows_per_scan");
+                     return domain;
+                   },
+          /*outer_condition_match=*/
+                   current_level_join_conditions.type == JoinType::LEFT
+                   ? std::function<llvm::Value*(const std::vector<llvm::Value*>&)>(
+                       outer_join_condition_cb)
+                   : nullptr,
+          /*found_outer_matches=*/
+                   current_level_join_conditions.type == JoinType::LEFT
+                   ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
+                   : nullptr,
+          /*hoisted_filters=*/nullptr,
+          /*is_deleted=*/is_deleted_cb);
+    }
+  }
+  return join_loops;
 }
 
 }  // namespace cider_executor
@@ -1931,7 +2487,7 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
   cider_executor::preloadFragOffsets(ra_exe_unit.input_descs, query_infos, cgen_state_);
   RelAlgExecutionUnit body_execution_unit = ra_exe_unit;
   const auto join_loops =
-      executor_->buildJoinLoops(body_execution_unit, co, eo, query_infos, column_cache);
+      cider_executor::buildJoinLoops(body_execution_unit, co, eo, query_infos, column_cache, executor_, cgen_state_, plan_state_, catalog_);
 
   plan_state_->allocateLocalColumnIds(ra_exe_unit.input_col_descs);
   // todo: remove executor

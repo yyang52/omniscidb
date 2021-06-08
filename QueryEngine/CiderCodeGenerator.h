@@ -23,7 +23,10 @@
 #include "GpuSharedMemoryUtils.h"
 #include "LLVMFunctionAttributesUtil.h"
 #include "OutputBufferInitialization.h"
+#include "QueryEngine/LoopControlFlow/JoinLoop.h"
 #include "QueryTemplateGenerator.h"
+#include "ErrorHandling.h"
+#include "ScalarExprVisitor.h"
 
 #include "Shared/MathUtils.h"
 
@@ -128,7 +131,8 @@ class CiderCodeGenerator {
   Executor* executor_;
   std::shared_ptr<CgenState> cgen_state_;
   std::shared_ptr<PlanState> plan_state_;
-  const unsigned block_size_x_ = 0; // FIXME update via constructor
-  const unsigned grid_size_x_ = 0;  // FIXME update via constructor
+  const unsigned block_size_x_ = 0; // FIXME(Cheng) update via constructor
+  const unsigned grid_size_x_ = 0;  // FIXME(Cheng) update via constructor
   std::shared_ptr<CiderMetrics> metrics_;
+  // std::atomic<bool> interrupted_; FIXME(Cheng) no need for atomic? single threaded
 };
