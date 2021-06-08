@@ -99,7 +99,7 @@ std::shared_ptr<CompilationContext> CiderCodeGenerator::optimizeAndCodegenGPU(
   initializeNVPTXBackend();                                         // todo
   CodeGenerator::GPUTarget gpu_target{nvptx_target_machine_.get(),  // todo
                                       cuda_mgr,
-                                      exeuctor_->blockSize(),  // todo
+                                      cider_executor::blockSize(catalog_, block_size_x_),  // todo
                                       cgen_state.get(),
                                       row_func_not_inlined};
   std::shared_ptr<GpuCompilationContext> compilation_context;
@@ -773,6 +773,16 @@ void nukeOldState(const bool allow_lazy_fetch,
                                  executor));
 };
 
+unsigned blockSize(Catalog_Namespace::Catalog* catalog, unsigned block_size_x) {
+  CHECK(catalog);
+  const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
+  if (!cuda_mgr) {
+    return 0;
+  }
+  const auto& dev_props = cuda_mgr->getAllDeviceProperties();
+  return block_size_x ? block_size_x : dev_props.front().maxThreadsPerBlock;
+}
+
 }  // namespace cider_executor
 
 std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>>
@@ -845,7 +855,7 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
                                          ra_exe_unit,
                                          cuda_mgr,
                                          co.device_type,
-                                         cuda_mgr ? executor_->blockSize() : 1,
+                                         cuda_mgr ? cider_executor::blockSize(catalog_, block_size_x_) : 1,
                                          cuda_mgr ? executor_->numBlocksPerMP() : 1);
   if (gpu_shared_mem_optimization) {
     // disable interleaved bins optimization on the GPU
