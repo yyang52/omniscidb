@@ -114,6 +114,6 @@ class CiderCodeGenerator {
   Executor* executor_;
   std::shared_ptr<CgenState> cgen_state_;
   std::shared_ptr<PlanState> plan_state_;
-  const unsigned block_size_x_;
+  const unsigned block_size_x_ = 0;
   std::shared_ptr<CiderMetrics> metrics_;
 };
