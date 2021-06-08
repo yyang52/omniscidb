@@ -1632,6 +1632,38 @@ unsigned numBlocksPerMP(Catalog_Namespace::Catalog* catalog, unsigned grid_size_
                       : 2;
 }
 
+void preloadFragOffsets(const std::vector<InputDescriptor>& input_descs,
+                        const std::vector<InputTableInfo>& query_infos,
+                        std::shared_ptr<CgenState> cgen_state) {
+  AUTOMATIC_IR_METADATA(cgen_state.get());
+  const auto ld_count = input_descs.size();
+  auto frag_off_ptr = get_arg_by_name(cgen_state->row_func_, "frag_row_off");
+  for (size_t i = 0; i < ld_count; ++i) {
+    CHECK_LT(i, query_infos.size());
+    const auto frag_count = query_infos[i].info.fragments.size();
+    if (i > 0) {
+      cgen_state->frag_offsets_.push_back(nullptr);
+    } else {
+      if (frag_count > 1) {
+        cgen_state->frag_offsets_.push_back(
+            cgen_state->ir_builder_.CreateLoad(frag_off_ptr));
+      } else {
+        cgen_state->frag_offsets_.push_back(nullptr);
+      }
+    }
+  }
+}
+
+inline llvm::Value* get_arg_by_name(llvm::Function* func, const std::string& name) {
+  for (auto& arg : func->args()) {
+    if (arg.getName() == name) {
+      return &arg;
+    }
+  }
+  CHECK(false);
+  return nullptr;
+}
+
 }  // namespace cider_executor
 
 // didn't make it in cider_executor namespace because we need call GroupByAndAggregate
@@ -1896,8 +1928,7 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
   cgen_state_->current_func_ = cgen_state_->row_func_;
   cgen_state_->ir_builder_.SetInsertPoint(cgen_state_->row_func_bb_);
 
-  // todo: remove executor
-  executor_->preloadFragOffsets(ra_exe_unit.input_descs, query_infos);
+  cider_executor::preloadFragOffsets(ra_exe_unit.input_descs, query_infos, cgen_state_);
   RelAlgExecutionUnit body_execution_unit = ra_exe_unit;
   const auto join_loops =
       executor_->buildJoinLoops(body_execution_unit, co, eo, query_infos, column_cache);
