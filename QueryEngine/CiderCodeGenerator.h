@@ -129,5 +129,6 @@ class CiderCodeGenerator {
   std::shared_ptr<CgenState> cgen_state_;
   std::shared_ptr<PlanState> plan_state_;
   const unsigned block_size_x_ = 0; // FIXME update via constructor
+  const unsigned grid_size_x_ = 0;  // FIXME update via constructor
   std::shared_ptr<CiderMetrics> metrics_;
 };

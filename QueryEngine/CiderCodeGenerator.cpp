@@ -1624,6 +1624,14 @@ unsigned blockSize(Catalog_Namespace::Catalog* catalog, unsigned block_size_x) {
   return block_size_x ? block_size_x : dev_props.front().maxThreadsPerBlock;
 }
 
+unsigned numBlocksPerMP(Catalog_Namespace::Catalog* catalog, unsigned grid_size_x) {
+  CHECK(catalog_);
+  const auto cuda_mgr = catalog_->getDataMgr().getCudaMgr();
+  CHECK(cuda_mgr);
+  return grid_size_x ? std::ceil(grid_size_x / cuda_mgr->getMinNumMPsForAllDevices())
+                      : 2;
+}
+
 }  // namespace cider_executor
 
 // didn't make it in cider_executor namespace because we need call GroupByAndAggregate
@@ -1762,7 +1770,7 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
                                          cuda_mgr,
                                          co.device_type,
                                          cuda_mgr ? cider_executor::blockSize(catalog_, block_size_x_) : 1,
-                                         cuda_mgr ? executor_->numBlocksPerMP() : 1);
+                                         cuda_mgr ? cider_executor::numBlocksPerMP(catalog_, grid_size_x_) : 1);
   if (gpu_shared_mem_optimization) {
     // disable interleaved bins optimization on the GPU
     query_mem_desc->setHasInterleavedBinsOnGpu(false);
