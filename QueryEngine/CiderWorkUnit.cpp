@@ -195,8 +195,8 @@ std::vector<Analyzer::Expr*> translate_targets(
   }
 
   for (const auto& target_rex_agg : aggregate->getAggExprs()) {
-    auto target_expr =
-        CiderRelAlgTranslator::translateAggregateRex(target_rex_agg.get(), scalar_sources);
+    auto target_expr = CiderRelAlgTranslator::translateAggregateRex(target_rex_agg.get(),
+                                                                    scalar_sources);
     CHECK(target_expr);
     target_expr = fold_expr(target_expr.get());
     target_exprs_owned.push_back(target_expr);
@@ -266,10 +266,9 @@ std::vector<TargetMetaInfo> get_targets_meta(
   return {};
 }
 
-CiderWorkUnit createAggregateCiderWorkUnit(
-    const RelAggregate* aggregate,
-    const SortInfo& sort_info,
-    const bool just_explain = false) {
+CiderWorkUnit createAggregateCiderWorkUnit(const RelAggregate* aggregate,
+                                           const SortInfo& sort_info,
+                                           const bool just_explain = false) {
   const auto input_to_nest_level = get_input_nest_levels(aggregate, {});  //
 
   const auto join_type = get_join_type(aggregate);
@@ -287,7 +286,8 @@ CiderWorkUnit createAggregateCiderWorkUnit(
   const auto targets_meta = get_targets_meta(aggregate, target_exprs);
   aggregate->setOutputMetainfo(targets_meta);
   int max_groups_buffer_entry_default_guess = 16384;
-  // std::shared_ptr<const query_state::QueryState> query_state= std::make_shared<query_state::QueryState>();
+  // std::shared_ptr<const query_state::QueryState> query_state=
+  // std::make_shared<query_state::QueryState>();
   return {CiderRelAlgExecutionUnit{{},
                                    {},
                                    {},
@@ -298,22 +298,22 @@ CiderWorkUnit createAggregateCiderWorkUnit(
                                    0,
                                    RegisteredQueryHint::defaults(),
                                    false,
-                                   std::nullopt
-                                   },
+                                   std::nullopt},
           aggregate,
           max_groups_buffer_entry_default_guess,
           nullptr};
 }
 
-CiderUnitModuler CiderUnitModuler::createCiderUnitModuler(std::shared_ptr<RelAlgNode> plan) {
+CiderUnitModuler CiderUnitModuler::createCiderUnitModuler(
+    std::shared_ptr<RelAlgNode> plan) {
   const auto aggregate = dynamic_cast<const RelAggregate*>(plan.get());
   bool just_explain = false;
-  // todo : use work_unit
+  std::shared_ptr<CiderWorkUnit> work_unit;
   if (aggregate) {
-     const auto work_unit = createAggregateCiderWorkUnit(
-        aggregate, {{}, SortAlgorithm::Default, 0, 0}, just_explain);
+    work_unit = std::make_shared<CiderWorkUnit>(createAggregateCiderWorkUnit(
+        aggregate, {{}, SortAlgorithm::Default, 0, 0}, just_explain));
   }
-  return std::move(CiderUnitModuler());
+  return std::move(CiderUnitModuler(work_unit));
 }
 
 // void CiderUnitModuler::createCiderUnitModuler(CiderWorkUnit worker) {

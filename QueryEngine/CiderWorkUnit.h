@@ -16,13 +16,11 @@ struct CiderWorkUnit {
 
 class CiderUnitModuler {
  public:
-  CiderUnitModuler(){};
-  // CiderUnitModuler(CiderWorkUnit* worker_unit) : worker_unit_(worker_unit){};
   static CiderUnitModuler createCiderUnitModuler(std::shared_ptr<RelAlgNode> plan);
-  // static createCiderUnitModuler(CiderWorkUnit worker)
   // std::unique_ptr<QueryMemoryDescriptor> compile();
   int executeWithData(char* inputData) { return -1; };
 
  private:
-  CiderWorkUnit* worker_unit_;
+  CiderUnitModuler(std::shared_ptr<CiderWorkUnit> worker_unit) : worker_unit_(worker_unit){};
+  std::shared_ptr<CiderWorkUnit> worker_unit_;
 };
