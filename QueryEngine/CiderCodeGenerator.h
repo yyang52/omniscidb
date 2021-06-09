@@ -86,6 +86,41 @@ class CiderCodeGenerator {
       ColumnCacheMap& column_cache,
       RenderInfo* render_info);
 
+  // TODO(Cheng) make it private???
+  std::vector<std::unique_ptr<ExecutionKernel>> createKernels(
+      SharedKernelContext& shared_context,
+      const RelAlgExecutionUnit& ra_exe_unit,
+      ColumnFetcher& column_fetcher,
+      const std::vector<InputTableInfo>& table_infos,
+      const ExecutionOptions& eo,
+      const bool is_agg,
+      const bool allow_single_frag_table_opt,
+      const size_t context_count,
+      const QueryCompilationDescriptor& query_comp_desc,
+      const QueryMemoryDescriptor& query_mem_desc,
+      RenderInfo* render_info,
+      std::unordered_set<int>& available_gpus,
+      int& available_cpus,
+      std::shared_ptr<PlanState> plan_state,
+      Catalog_Namespace::Catalog* catalog,
+      Executor* executor
+  );
+
+//  std::vector<std::unique_ptr<ExecutionKernel>> createKernelsWithQueryMemoryDescriptor(
+//      std::shared_ptr<QueryMemoryDescriptor> query_mem_desc_owned,
+//      size_t& max_groups_buffer_entry_guess,
+//      const bool is_agg,
+//      const bool allow_single_frag_table_opt,
+//      const std::vector<InputTableInfo>& query_infos,
+//      const RelAlgExecutionUnit& ra_exe_unit_in,
+//      const CompilationOptions& co,
+//      const ExecutionOptions& eo,
+//      const Catalog_Namespace::Catalog& cat,
+//      std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
+//      RenderInfo* render_info,
+//      const bool has_cardinality_estimation,
+//      ColumnCacheMap& column_cache);
+
   std::shared_ptr<CompilationContext> getCodeFromCache(
       const CodeCacheKey& key,
       const CodeCache& cache,
