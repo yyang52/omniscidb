@@ -19,13 +19,13 @@
 #include "CodeGenerator.h"
 #include "CompilationContext.h"
 #include "Descriptors/QueryCompilationDescriptor.h"
+#include "ErrorHandling.h"
 #include "Execute.h"
 #include "GpuSharedMemoryUtils.h"
 #include "LLVMFunctionAttributesUtil.h"
 #include "OutputBufferInitialization.h"
 #include "QueryEngine/LoopControlFlow/JoinLoop.h"
 #include "QueryTemplateGenerator.h"
-#include "ErrorHandling.h"
 #include "ScalarExprVisitor.h"
 
 #include "Shared/MathUtils.h"
@@ -113,16 +113,19 @@ class CiderCodeGenerator {
       std::shared_ptr<CgenState> cgen_state);
 
   static void codegenJoinLoops(const std::vector<JoinLoop>& join_loops,
-                   const RelAlgExecutionUnit& ra_exe_unit,
-                   GroupByAndAggregate& group_by_and_aggregate,
-                   llvm::Function* query_func,
-                   llvm::BasicBlock* entry_bb,
-                   const QueryMemoryDescriptor& query_mem_desc,
-                   const CompilationOptions& co,
-                   const ExecutionOptions& eo,
-                   std::shared_ptr<CgenState> cgen_state,
-                   std::shared_ptr<PlanState> plan_state,
-                   Executor* executor);
+                               const RelAlgExecutionUnit& ra_exe_unit,
+                               GroupByAndAggregate& group_by_and_aggregate,
+                               llvm::Function* query_func,
+                               llvm::BasicBlock* entry_bb,
+                               const QueryMemoryDescriptor& query_mem_desc,
+                               const CompilationOptions& co,
+                               const ExecutionOptions& eo,
+                               std::shared_ptr<CgenState> cgen_state,
+                               std::shared_ptr<PlanState> plan_state,
+                               Executor* executor,
+                               Catalog_Namespace::Catalog* catalog,
+                               const unsigned block_size_x,
+                               const unsigned grid_size_x );
 
  private:
   CodeCache cpu_code_cache_;
@@ -131,8 +134,8 @@ class CiderCodeGenerator {
   Executor* executor_;
   std::shared_ptr<CgenState> cgen_state_;
   std::shared_ptr<PlanState> plan_state_;
-  const unsigned block_size_x_ = 0; // FIXME(Cheng) update via constructor
-  const unsigned grid_size_x_ = 0;  // FIXME(Cheng) update via constructor
+  const unsigned block_size_x_ = 0;  // FIXME(Cheng) update via constructor
+  const unsigned grid_size_x_ = 0;   // FIXME(Cheng) update via constructor
   std::shared_ptr<CiderMetrics> metrics_;
   // std::atomic<bool> interrupted_; FIXME(Cheng) no need for atomic? single threaded
 };

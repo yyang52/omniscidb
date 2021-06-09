@@ -96,12 +96,13 @@ std::shared_ptr<CompilationContext> CiderCodeGenerator::optimizeAndCodegenGPU(
     }
   }
 
-  initializeNVPTXBackend();                                         // todo
-  CodeGenerator::GPUTarget gpu_target{nvptx_target_machine_.get(),  // todo
-                                      cuda_mgr,
-                                      cider_executor::blockSize(catalog_, block_size_x_),  // todo
-                                      cgen_state.get(),
-                                      row_func_not_inlined};
+  initializeNVPTXBackend();  // todo
+  CodeGenerator::GPUTarget gpu_target{
+      nvptx_target_machine_.get(),  // todo
+      cuda_mgr,
+      cider_executor::blockSize(catalog_, block_size_x_),  // todo
+      cgen_state.get(),
+      row_func_not_inlined};
   std::shared_ptr<GpuCompilationContext> compilation_context;
 
   if (cider::check_module_requires_libdevice(module)) {
@@ -1081,11 +1082,12 @@ JoinLoop::HoistedFiltersCallback buildHoistLeftHandSideFiltersCb(
 
         // build the filters callback and return it
         if (!hoisted_quals.empty()) {
-          return [executor, hoisted_quals, co, plan_state](llvm::BasicBlock* true_bb,
-                                           llvm::BasicBlock* exit_bb,
-                                           const std::string& loop_name,
-                                           llvm::Function* parent_func,
-                                           CgenState* cgen_state) -> llvm::BasicBlock* {
+          return [executor, hoisted_quals, co, plan_state](
+                     llvm::BasicBlock* true_bb,
+                     llvm::BasicBlock* exit_bb,
+                     const std::string& loop_name,
+                     llvm::Function* parent_func,
+                     CgenState* cgen_state) -> llvm::BasicBlock* {
             // make sure we have quals to hoist
             bool has_quals_to_hoist = false;
             for (const auto& qual : hoisted_quals) {
@@ -1110,7 +1112,7 @@ JoinLoop::HoistedFiltersCallback buildHoistLeftHandSideFiltersCb(
                 llvm::BasicBlock::Create(context,
                                          "hoisted_left_join_filters_" + loop_name,
                                          parent_func,
-                    /*insert_before=*/true_bb);
+                                         /*insert_before=*/true_bb);
             builder.SetInsertPoint(filter_bb);
 
             llvm::Value* filter_lv = cgen_state->llBool(true);
@@ -1139,11 +1141,10 @@ JoinLoop::HoistedFiltersCallback buildHoistLeftHandSideFiltersCb(
   return nullptr;
 }
 
-
 void insertErrorCodeChecker(llvm::Function* query_func,
-                                      bool hoist_literals,
-                                      bool allow_runtime_query_interrupt,
-                                      std::shared_ptr<CgenState> cgen_state) {
+                            bool hoist_literals,
+                            bool allow_runtime_query_interrupt,
+                            std::shared_ptr<CgenState> cgen_state) {
   auto query_stub_func_name =
       "query_stub" + std::string(hoist_literals ? "_hoisted_literals" : "");
   for (auto bb_it = query_func->begin(); bb_it != query_func->end(); ++bb_it) {
@@ -1315,12 +1316,34 @@ llvm::Value* find_variable_in_basic_block(llvm::Function* func,
   return result;
 }
 
+unsigned blockSize(Catalog_Namespace::Catalog* catalog, unsigned block_size_x) {
+  CHECK(catalog);
+  const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
+  if (!cuda_mgr) {
+    return 0;
+  }
+  const auto& dev_props = cuda_mgr->getAllDeviceProperties();
+  return block_size_x ? block_size_x : dev_props.front().maxThreadsPerBlock;
+}
+
+unsigned gridSize(Catalog_Namespace::Catalog* catalog, unsigned grid_size_x) {
+  CHECK(catalog);
+  const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
+  if (!cuda_mgr) {
+    return 0;
+  }
+  return grid_size_x ? grid_size_x : 2 * cuda_mgr->getMinNumMPsForAllDevices();
+}
+
 void createErrorCheckControlFlow(llvm::Function* query_func,
                                  bool run_with_dynamic_watchdog,
                                  bool run_with_allowing_runtime_interrupt,
                                  ExecutorDeviceType device_type,
                                  const std::vector<InputTableInfo>& input_table_infos,
-                                 std::shared_ptr<CgenState> cgen_state) {
+                                 std::shared_ptr<CgenState> cgen_state,
+                                 Catalog_Namespace::Catalog* catalog,
+                                 const unsigned block_size_x = 0,
+                                 const unsigned grid_size_x = 0) {
   AUTOMATIC_IR_METADATA(cgen_state.get());
 
   // check whether the row processing was successful; currently, it can
@@ -1380,16 +1403,18 @@ void createErrorCheckControlFlow(llvm::Function* query_func,
             // only those blocks whose none of their threads have experienced the critical
             // edge will go through the dynamic watchdog computation
             CHECK(row_count);
-            llvm::Value* crit_edge_rem = nullptr;
-            // auto crit_edge_rem =
-            // TODO: cheng will change blockSize() method;
-            // (blockSize() & (blockSize() - 1))
-            //     ? ir_builder.CreateSRem(
-            //           row_count,
-            //           cgen_state->llInt(static_cast<int64_t>(blockSize())))
-            //     : ir_builder.CreateAnd(
-            //           row_count,
-            //           cgen_state->llInt(static_cast<int64_t>(blockSize() - 1)));
+            // llvm::Value* crit_edge_rem = nullptr;
+            auto crit_edge_rem =
+                (cider_executor::blockSize(catalog, block_size_x) &
+                 (cider_executor::blockSize(catalog, block_size_x) - 1))
+                    ? ir_builder.CreateSRem(
+                          row_count,
+                          cgen_state->llInt(static_cast<int64_t>(
+                              cider_executor::blockSize(catalog, block_size_x))))
+                    : ir_builder.CreateAnd(
+                          row_count,
+                          cgen_state->llInt(static_cast<int64_t>(
+                              cider_executor::blockSize(catalog, block_size_x) - 1)));
             auto crit_edge_threshold = ir_builder.CreateSub(row_count, crit_edge_rem);
             crit_edge_threshold->setName("crit_edge_threshold");
 
@@ -1438,11 +1463,10 @@ void createErrorCheckControlFlow(llvm::Function* query_func,
             // some CUDA threads cannot enter the interrupt checking block depending on
             // the fragment size --> a thread may not take care of 64 threads if an outer
             // table is not sufficiently large, and so cannot be interrupted
-            int32_t num_shift_by_gridDim = shared::getExpOfTwo(0);
-            int32_t num_shift_by_blockDim = shared::getExpOfTwo(0);
-            // TODO: change back once blockSize done;
-            // int32_t num_shift_by_gridDim = shared::getExpOfTwo(gridSize());
-            // int32_t num_shift_by_blockDim = shared::getExpOfTwo(blockSize());
+            int32_t num_shift_by_gridDim =
+                shared::getExpOfTwo(cider_executor::gridSize(catalog, grid_size_x));
+            int32_t num_shift_by_blockDim =
+                shared::getExpOfTwo(cider_executor::blockSize(catalog, block_size_x));
             int total_num_shift = num_shift_by_gridDim + num_shift_by_blockDim;
             uint64_t interrupt_checking_freq = 32;
             auto freq_control_knob = g_running_query_interrupt_freq;
@@ -1470,8 +1494,10 @@ void createErrorCheckControlFlow(llvm::Function* query_func,
                 // also we multiply 1 / freq_control_knob to K to control the frequency
                 // So, needs to check the interrupt status more frequently? make K smaller
                 // TODO: refactor gridSize/blockSize
-                auto max_inc = uint64_t(0);
-                // floor(num_outer_table_tuples / (gridSize() * blockSize() * 2)));
+                auto max_inc = uint64_t(
+                    floor(num_outer_table_tuples /
+                          (gridSize(catalog, grid_size_x) *
+                           cider_executor::blockSize(catalog, block_size_x) * 2)));
                 if (max_inc < 2) {
                   // too small `max_inc`, so this correction is necessary to make
                   // `interrupt_checking_freq` be valid (i.e., larger than zero)
@@ -1798,22 +1824,11 @@ bool compileBody(const RelAlgExecutionUnit& ra_exe_unit,
   return ret;
 };
 
-unsigned blockSize(Catalog_Namespace::Catalog* catalog, unsigned block_size_x) {
-  CHECK(catalog);
-  const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
-  if (!cuda_mgr) {
-    return 0;
-  }
-  const auto& dev_props = cuda_mgr->getAllDeviceProperties();
-  return block_size_x ? block_size_x : dev_props.front().maxThreadsPerBlock;
-}
-
 unsigned numBlocksPerMP(Catalog_Namespace::Catalog* catalog, unsigned grid_size_x) {
   CHECK(catalog);
   const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
   CHECK(cuda_mgr);
-  return grid_size_x ? std::ceil(grid_size_x / cuda_mgr->getMinNumMPsForAllDevices())
-                      : 2;
+  return grid_size_x ? std::ceil(grid_size_x / cuda_mgr->getMinNumMPsForAllDevices()) : 2;
 }
 
 void preloadFragOffsets(const std::vector<InputDescriptor>& input_descs,
@@ -1875,7 +1890,8 @@ void check_valid_join_qual(std::shared_ptr<Analyzer::BinOper>& bin_oper) {
   }
 }
 
-int deviceCount(Catalog_Namespace::Catalog* catalog, const ExecutorDeviceType device_type) {
+int deviceCount(Catalog_Namespace::Catalog* catalog,
+                const ExecutorDeviceType device_type) {
   if (device_type == ExecutorDeviceType::GPU) {
     const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
     CHECK(cuda_mgr);
@@ -1885,8 +1901,8 @@ int deviceCount(Catalog_Namespace::Catalog* catalog, const ExecutorDeviceType de
   }
 }
 
-int deviceCountForMemoryLevel(
-    Catalog_Namespace::Catalog* catalog, const Data_Namespace::MemoryLevel memory_level) {
+int deviceCountForMemoryLevel(Catalog_Namespace::Catalog* catalog,
+                              const Data_Namespace::MemoryLevel memory_level) {
   return memory_level == GPU_LEVEL ? deviceCount(catalog, ExecutorDeviceType::GPU)
                                    : deviceCount(catalog, ExecutorDeviceType::CPU);
 }
@@ -1959,7 +1975,8 @@ std::shared_ptr<HashJoin> buildCurrentLevelHashTable(
           HashType::OneToOne,
           column_cache,
           ra_exe_unit.query_hint,
-          executor, catalog);
+          executor,
+          catalog);
       current_level_hash_table = hash_table_or_error.hash_table;
     }
     if (hash_table_or_error.hash_table) {
@@ -1976,11 +1993,11 @@ std::shared_ptr<HashJoin> buildCurrentLevelHashTable(
 }
 
 std::function<llvm::Value*(const std::vector<llvm::Value*>&, llvm::Value*)>
-  buildIsDeletedCb(const RelAlgExecutionUnit& ra_exe_unit,
-                           const size_t level_idx,
-                           const CompilationOptions& co,
-                   std::shared_ptr<CgenState> cgen_state,
-                   std::shared_ptr<PlanState> plan_state,
+buildIsDeletedCb(const RelAlgExecutionUnit& ra_exe_unit,
+                 const size_t level_idx,
+                 const CompilationOptions& co,
+                 std::shared_ptr<CgenState> cgen_state,
+                 std::shared_ptr<PlanState> plan_state,
                  Executor* executor) {
   AUTOMATIC_IR_METADATA(cgen_state.get());
   if (!co.filter_on_deleted_column) {
@@ -2001,9 +2018,11 @@ std::function<llvm::Value*(const std::vector<llvm::Value*>&, llvm::Value*)>
                                                           input_desc.getTableId(),
                                                           deleted_cd->columnId,
                                                           input_desc.getNestLevel());
-  return [executor, deleted_expr, level_idx, &co, cgen_state](const std::vector<llvm::Value*>& prev_iters,
-                                              llvm::Value* have_more_inner_rows) {
-    const auto matching_row_index = addJoinLoopIterator(prev_iters, level_idx + 1, cgen_state);
+  return [executor, deleted_expr, level_idx, &co, cgen_state](
+             const std::vector<llvm::Value*>& prev_iters,
+             llvm::Value* have_more_inner_rows) {
+    const auto matching_row_index =
+        addJoinLoopIterator(prev_iters, level_idx + 1, cgen_state);
     // Avoid fetching the deleted column from a position which is not valid.
     // An invalid position can be returned by a one to one hash lookup (negative)
     // or at the end of iteration over a set of matching values.
@@ -2038,16 +2057,15 @@ std::function<llvm::Value*(const std::vector<llvm::Value*>&, llvm::Value*)>
   };
 }
 
-std::vector<JoinLoop> buildJoinLoops(
-    RelAlgExecutionUnit& ra_exe_unit,
-    const CompilationOptions& co,
-    const ExecutionOptions& eo,
-    const std::vector<InputTableInfo>& query_infos,
-    ColumnCacheMap& column_cache,
-    Executor* executor,
-    std::shared_ptr<CgenState> cgen_state,
-    std::shared_ptr<PlanState> plan_state,
-    Catalog_Namespace::Catalog* catalog) {
+std::vector<JoinLoop> buildJoinLoops(RelAlgExecutionUnit& ra_exe_unit,
+                                     const CompilationOptions& co,
+                                     const ExecutionOptions& eo,
+                                     const std::vector<InputTableInfo>& query_infos,
+                                     ColumnCacheMap& column_cache,
+                                     Executor* executor,
+                                     std::shared_ptr<CgenState> cgen_state,
+                                     std::shared_ptr<PlanState> plan_state,
+                                     Catalog_Namespace::Catalog* catalog) {
   INJECT_TIMER(buildJoinLoops);
   AUTOMATIC_IR_METADATA(cgen_state.get());
   std::vector<JoinLoop> join_loops;
@@ -2065,8 +2083,16 @@ std::vector<JoinLoop> buildJoinLoops(
             current_level_join_conditions.type == JoinType::LEFT) {
           JoinCondition join_condition{{first_qual}, current_level_join_conditions.type};
 
-          return buildCurrentLevelHashTable(
-              join_condition, ra_exe_unit, co, query_infos, column_cache, fail_reasons, cgen_state, plan_state, executor, catalog);
+          return buildCurrentLevelHashTable(join_condition,
+                                            ra_exe_unit,
+                                            co,
+                                            query_infos,
+                                            column_cache,
+                                            fail_reasons,
+                                            cgen_state,
+                                            plan_state,
+                                            executor,
+                                            catalog);
         }
       }
       return buildCurrentLevelHashTable(current_level_join_conditions,
@@ -2077,17 +2103,18 @@ std::vector<JoinLoop> buildJoinLoops(
                                         fail_reasons,
                                         cgen_state,
                                         plan_state,
-                                        executor, catalog);
+                                        executor,
+                                        catalog);
     };
     const auto current_level_hash_table = build_cur_level_hash_table();
-    const auto found_outer_join_matches_cb =
-        [executor, level_idx, cgen_state](llvm::Value* found_outer_join_matches) {
-          CHECK_LT(level_idx, cgen_state->outer_join_match_found_per_level_.size());
-          CHECK(!cgen_state->outer_join_match_found_per_level_[level_idx]);
-          cgen_state->outer_join_match_found_per_level_[level_idx] =
-              found_outer_join_matches;
-        };
-    const auto is_deleted_cb = buildIsDeletedCb(ra_exe_unit, level_idx, co, cgen_state, plan_state, executor);
+    const auto found_outer_join_matches_cb = [executor, level_idx, cgen_state](
+                                                 llvm::Value* found_outer_join_matches) {
+      CHECK_LT(level_idx, cgen_state->outer_join_match_found_per_level_.size());
+      CHECK(!cgen_state->outer_join_match_found_per_level_[level_idx]);
+      cgen_state->outer_join_match_found_per_level_[level_idx] = found_outer_join_matches;
+    };
+    const auto is_deleted_cb =
+        buildIsDeletedCb(ra_exe_unit, level_idx, co, cgen_state, plan_state, executor);
     const auto outer_join_condition_multi_quals_cb =
         [executor, level_idx, &co, &current_level_join_conditions, cgen_state](
             const std::vector<llvm::Value*>& prev_iters) {
@@ -2104,7 +2131,7 @@ std::vector<JoinLoop> buildJoinLoops(
           if (current_level_join_conditions.quals.size() >= 2) {
             auto qual_it = std::next(current_level_join_conditions.quals.begin(), 1);
             for (; qual_it != current_level_join_conditions.quals.end();
-                   std::advance(qual_it, 1)) {
+                 std::advance(qual_it, 1)) {
               left_join_cond = cgen_state->ir_builder_.CreateAnd(
                   left_join_cond,
                   code_generator.toBool(
@@ -2114,25 +2141,35 @@ std::vector<JoinLoop> buildJoinLoops(
           return left_join_cond;
         };
     if (current_level_hash_table) {
-      const auto hoisted_filters_cb = buildHoistLeftHandSideFiltersCb(
-          ra_exe_unit, level_idx, current_level_hash_table->getInnerTableId(), co, cgen_state, plan_state, executor);
+      const auto hoisted_filters_cb =
+          buildHoistLeftHandSideFiltersCb(ra_exe_unit,
+                                          level_idx,
+                                          current_level_hash_table->getInnerTableId(),
+                                          co,
+                                          cgen_state,
+                                          plan_state,
+                                          executor);
       if (current_level_hash_table->getHashType() == HashType::OneToOne) {
         join_loops.emplace_back(
             /*kind=*/JoinLoopKind::Singleton,
             /*type=*/current_level_join_conditions.type,
             /*iteration_domain_codegen=*/
-                     [executor, current_hash_table_idx, level_idx, current_level_hash_table, &co, cgen_state](
-                         const std::vector<llvm::Value*>& prev_iters) {
-                       addJoinLoopIterator(prev_iters, level_idx, cgen_state);
-                       JoinLoopDomain domain{{0}};
-                       domain.slot_lookup_result =
-                           current_level_hash_table->codegenSlot(co, current_hash_table_idx);
-                       return domain;
-                     },
+            [executor,
+             current_hash_table_idx,
+             level_idx,
+             current_level_hash_table,
+             &co,
+             cgen_state](const std::vector<llvm::Value*>& prev_iters) {
+              addJoinLoopIterator(prev_iters, level_idx, cgen_state);
+              JoinLoopDomain domain{{0}};
+              domain.slot_lookup_result =
+                  current_level_hash_table->codegenSlot(co, current_hash_table_idx);
+              return domain;
+            },
             /*outer_condition_match=*/nullptr,
             /*found_outer_matches=*/current_level_join_conditions.type == JoinType::LEFT
-                                    ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
-                                    : nullptr,
+                ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
+                : nullptr,
             /*hoisted_filters=*/hoisted_filters_cb,
             /*is_deleted=*/is_deleted_cb);
       } else {
@@ -2140,32 +2177,36 @@ std::vector<JoinLoop> buildJoinLoops(
             /*kind=*/JoinLoopKind::Set,
             /*type=*/current_level_join_conditions.type,
             /*iteration_domain_codegen=*/
-                     [executor, current_hash_table_idx, level_idx, current_level_hash_table, &co, cgen_state](
-                         const std::vector<llvm::Value*>& prev_iters) {
-                       addJoinLoopIterator(prev_iters, level_idx, cgen_state);
-                       JoinLoopDomain domain{{0}};
-                       const auto matching_set = current_level_hash_table->codegenMatchingSet(
-                           co, current_hash_table_idx);
-                       domain.values_buffer = matching_set.elements;
-                       domain.element_count = matching_set.count;
-                       return domain;
-                     },
+            [executor,
+             current_hash_table_idx,
+             level_idx,
+             current_level_hash_table,
+             &co,
+             cgen_state](const std::vector<llvm::Value*>& prev_iters) {
+              addJoinLoopIterator(prev_iters, level_idx, cgen_state);
+              JoinLoopDomain domain{{0}};
+              const auto matching_set = current_level_hash_table->codegenMatchingSet(
+                  co, current_hash_table_idx);
+              domain.values_buffer = matching_set.elements;
+              domain.element_count = matching_set.count;
+              return domain;
+            },
             /*outer_condition_match=*/
-                     current_level_join_conditions.type == JoinType::LEFT
-                     ? std::function<llvm::Value*(const std::vector<llvm::Value*>&)>(
-                         outer_join_condition_multi_quals_cb)
-                     : nullptr,
+            current_level_join_conditions.type == JoinType::LEFT
+                ? std::function<llvm::Value*(const std::vector<llvm::Value*>&)>(
+                      outer_join_condition_multi_quals_cb)
+                : nullptr,
             /*found_outer_matches=*/current_level_join_conditions.type == JoinType::LEFT
-                                    ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
-                                    : nullptr,
+                ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
+                : nullptr,
             /*hoisted_filters=*/hoisted_filters_cb,
             /*is_deleted=*/is_deleted_cb);
       }
       ++current_hash_table_idx;
     } else {
       const auto fail_reasons_str = current_level_join_conditions.quals.empty()
-                                    ? "No equijoin expression found"
-                                    : boost::algorithm::join(fail_reasons, " | ");
+                                        ? "No equijoin expression found"
+                                        : boost::algorithm::join(fail_reasons, " | ");
       check_if_loop_join_is_allowed(
           ra_exe_unit, eo, query_infos, level_idx, fail_reasons_str);
       // Callback provided to the `JoinLoop` framework to evaluate the (outer) join
@@ -2194,25 +2235,25 @@ std::vector<JoinLoop> buildJoinLoops(
           /*kind=*/JoinLoopKind::UpperBound,
           /*type=*/current_level_join_conditions.type,
           /*iteration_domain_codegen=*/
-                   [executor, level_idx, cgen_state](const std::vector<llvm::Value*>& prev_iters) {
-                     addJoinLoopIterator(prev_iters, level_idx, cgen_state);
-                     JoinLoopDomain domain{{0}};
-                     const auto rows_per_scan_ptr = cgen_state->ir_builder_.CreateGEP(
-                         get_arg_by_name(cgen_state->row_func_, "num_rows_per_scan"),
-                         cgen_state->llInt(int32_t(level_idx + 1)));
-                     domain.upper_bound = cgen_state->ir_builder_.CreateLoad(rows_per_scan_ptr,
-                                                                              "num_rows_per_scan");
-                     return domain;
-                   },
+          [executor, level_idx, cgen_state](const std::vector<llvm::Value*>& prev_iters) {
+            addJoinLoopIterator(prev_iters, level_idx, cgen_state);
+            JoinLoopDomain domain{{0}};
+            const auto rows_per_scan_ptr = cgen_state->ir_builder_.CreateGEP(
+                get_arg_by_name(cgen_state->row_func_, "num_rows_per_scan"),
+                cgen_state->llInt(int32_t(level_idx + 1)));
+            domain.upper_bound = cgen_state->ir_builder_.CreateLoad(rows_per_scan_ptr,
+                                                                    "num_rows_per_scan");
+            return domain;
+          },
           /*outer_condition_match=*/
-                   current_level_join_conditions.type == JoinType::LEFT
-                   ? std::function<llvm::Value*(const std::vector<llvm::Value*>&)>(
-                       outer_join_condition_cb)
-                   : nullptr,
+          current_level_join_conditions.type == JoinType::LEFT
+              ? std::function<llvm::Value*(const std::vector<llvm::Value*>&)>(
+                    outer_join_condition_cb)
+              : nullptr,
           /*found_outer_matches=*/
-                   current_level_join_conditions.type == JoinType::LEFT
-                   ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
-                   : nullptr,
+          current_level_join_conditions.type == JoinType::LEFT
+              ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
+              : nullptr,
           /*hoisted_filters=*/nullptr,
           /*is_deleted=*/is_deleted_cb);
     }
@@ -2234,7 +2275,10 @@ void CiderCodeGenerator::codegenJoinLoops(const std::vector<JoinLoop>& join_loop
                                           const ExecutionOptions& eo,
                                           std::shared_ptr<CgenState> cgen_state,
                                           std::shared_ptr<PlanState> plan_state,
-                                          Executor* executor) {
+                                          Executor* executor,
+                                          Catalog_Namespace::Catalog* catalog,
+                                          const unsigned block_size_x = 0,
+                                          const unsigned grid_size_x = 0) {
   AUTOMATIC_IR_METADATA(cgen_state.get());
   const auto exit_bb =
       llvm::BasicBlock::Create(cgen_state->context_, "exit", cgen_state->current_func_);
@@ -2254,7 +2298,10 @@ void CiderCodeGenerator::codegenJoinLoops(const std::vector<JoinLoop>& join_loop
        &join_loops,
        &ra_exe_unit,
        &cgen_state,
-       &plan_state](const std::vector<llvm::Value*>& prev_iters) {
+       &plan_state,
+       &catalog,
+       &block_size_x,
+       &grid_size_x](const std::vector<llvm::Value*>& prev_iters) {
         AUTOMATIC_IR_METADATA(cgen_state.get());
         cider_executor::addJoinLoopIterator(prev_iters, join_loops.size(), cgen_state);
         auto& builder = cgen_state->ir_builder_;
@@ -2276,7 +2323,10 @@ void CiderCodeGenerator::codegenJoinLoops(const std::vector<JoinLoop>& join_loop
                                                       eo.allow_runtime_query_interrupt,
                                                       co.device_type,
                                                       group_by_and_aggregate.query_infos_,
-                                                      cgen_state);
+                                                      cgen_state,
+                                                      catalog,
+                                                      block_size_x,
+                                                      grid_size_x);
         }
         return loop_body_bb;
       },
@@ -2352,13 +2402,13 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
   }
 
   const bool output_columnar = query_mem_desc->didOutputColumnar();
-  const bool gpu_shared_mem_optimization =
-      cider::is_gpu_shared_mem_supported(query_mem_desc.get(),
-                                         ra_exe_unit,
-                                         cuda_mgr,
-                                         co.device_type,
-                                         cuda_mgr ? cider_executor::blockSize(catalog_, block_size_x_) : 1,
-                                         cuda_mgr ? cider_executor::numBlocksPerMP(catalog_, grid_size_x_) : 1);
+  const bool gpu_shared_mem_optimization = cider::is_gpu_shared_mem_supported(
+      query_mem_desc.get(),
+      ra_exe_unit,
+      cuda_mgr,
+      co.device_type,
+      cuda_mgr ? cider_executor::blockSize(catalog_, block_size_x_) : 1,
+      cuda_mgr ? cider_executor::numBlocksPerMP(catalog_, grid_size_x_) : 1);
   if (gpu_shared_mem_optimization) {
     // disable interleaved bins optimization on the GPU
     query_mem_desc->setHasInterleavedBinsOnGpu(false);
@@ -2486,8 +2536,15 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
 
   cider_executor::preloadFragOffsets(ra_exe_unit.input_descs, query_infos, cgen_state_);
   RelAlgExecutionUnit body_execution_unit = ra_exe_unit;
-  const auto join_loops =
-      cider_executor::buildJoinLoops(body_execution_unit, co, eo, query_infos, column_cache, executor_, cgen_state_, plan_state_, catalog_);
+  const auto join_loops = cider_executor::buildJoinLoops(body_execution_unit,
+                                                         co,
+                                                         eo,
+                                                         query_infos,
+                                                         column_cache,
+                                                         executor_,
+                                                         cgen_state_,
+                                                         plan_state_,
+                                                         catalog_);
 
   plan_state_->allocateLocalColumnIds(ra_exe_unit.input_col_descs);
   // todo: remove executor
@@ -2508,7 +2565,10 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
                                          eo,
                                          cgen_state_,
                                          plan_state_,
-                                         executor_);
+                                         executor_,
+                                         catalog_,
+                                         block_size_x_,
+                                         grid_size_x_);
   } else {
     // todo: remove executor
     const bool can_return_error = cider_executor::compileBody(ra_exe_unit,
@@ -2528,7 +2588,10 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
                                                   eo.allow_runtime_query_interrupt,
                                                   co.device_type,
                                                   group_by_and_aggregate.query_infos_,
-                                                  cgen_state_);
+                                                  cgen_state_,
+                                                  catalog_,
+                                                  block_size_x_,
+                                                  grid_size_x_);
     }
   }
   std::vector<llvm::Value*> hoisted_literals;
@@ -2607,8 +2670,10 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
   CHECK(multifrag_query_func);
 
   if (co.device_type == ExecutorDeviceType::GPU && eo.allow_multifrag) {
-    cider_executor::insertErrorCodeChecker(
-        multifrag_query_func, co.hoist_literals, eo.allow_runtime_query_interrupt, cgen_state_);
+    cider_executor::insertErrorCodeChecker(multifrag_query_func,
+                                           co.hoist_literals,
+                                           eo.allow_runtime_query_interrupt,
+                                           cgen_state_);
   }
 
   cider::bind_query(
