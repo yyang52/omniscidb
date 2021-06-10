@@ -866,14 +866,13 @@ std::vector<ColumnLazyFetchInfo> getColLazyFetchInfo(
       auto col_id = col_var->get_column_id();
       auto rte_idx = (col_var->get_rte_idx() == -1) ? 0 : col_var->get_rte_idx();
       auto cd = (col_var->get_table_id() > 0)
-                ? get_column_descriptor(col_id, col_var->get_table_id(), *catalog)
-                : nullptr;
+                    ? get_column_descriptor(col_id, col_var->get_table_id(), *catalog)
+                    : nullptr;
       if (cd && IS_GEO(cd->columnType.get_type())) {
         // Geo coords cols will be processed in sequence. So we only need to track the
         // first coords col in lazy fetch info.
         {
-          auto cd0 =
-              get_column_descriptor(col_id + 1, col_var->get_table_id(), *catalog);
+          auto cd0 = get_column_descriptor(col_id + 1, col_var->get_table_id(), *catalog);
           auto col0_ti = cd0->columnType;
           CHECK(!cd0->isVirtualCol);
           auto col0_var = makeExpr<Analyzer::ColumnVar>(
@@ -2906,7 +2905,8 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
       std::move(query_mem_desc));
 }
 
-//std::vector<std::unique_ptr<ExecutionKernel>> CiderCodeGenerator::createKernelsWithQueryMemoryDescriptor(
+// std::vector<std::unique_ptr<ExecutionKernel>>
+// CiderCodeGenerator::createKernelsWithQueryMemoryDescriptor(
 //    std::shared_ptr<QueryMemoryDescriptor> query_mem_desc_owned,
 //    size_t& max_groups_buffer_entry_guess,
 //    const bool is_agg,
@@ -3032,9 +3032,10 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
 //          mapd_shared_lock<mapd_shared_mutex> session_read_lock(
 //              executor->getSessionLock());
 //          curRunningSession = executor->getCurrentQuerySession(session_read_lock);
-//          curRunningQuerySubmittedTime = ra_exe_unit.query_state->getQuerySubmittedTime();
-//          sessionEnrolled =
-//              executor->checkIsQuerySessionEnrolled(curRunningSession, session_read_lock);
+//          curRunningQuerySubmittedTime =
+//          ra_exe_unit.query_state->getQuerySubmittedTime(); sessionEnrolled =
+//              executor->checkIsQuerySessionEnrolled(curRunningSession,
+//              session_read_lock);
 //        }
 //        if (!curRunningSession.empty() && !curRunningQuerySubmittedTime.empty() &&
 //            sessionEnrolled) {
@@ -3089,16 +3090,15 @@ std::vector<std::unique_ptr<ExecutionKernel>> CiderCodeGenerator::createKernels(
     int& available_cpus,
     std::shared_ptr<PlanState> plan_state,
     Catalog_Namespace::Catalog* catalog,
-    Executor* executor
-    ) {
+    Executor* executor) {
   std::vector<std::unique_ptr<ExecutionKernel>> execution_kernels;
 
   QueryFragmentDescriptor fragment_descriptor(
       ra_exe_unit,
       table_infos,
       query_comp_desc.getDeviceType() == ExecutorDeviceType::GPU
-      ? catalog->getDataMgr().getMemoryInfo(Data_Namespace::MemoryLevel::GPU_LEVEL)
-      : std::vector<Data_Namespace::MemoryInfo>{},
+          ? catalog->getDataMgr().getMemoryInfo(Data_Namespace::MemoryLevel::GPU_LEVEL)
+          : std::vector<Data_Namespace::MemoryInfo>{},
       eo.gpu_input_mem_limit_percent,
       eo.outer_fragment_indices);
   CHECK(!ra_exe_unit.input_descs.empty());
@@ -3106,7 +3106,8 @@ std::vector<std::unique_ptr<ExecutionKernel>> CiderCodeGenerator::createKernels(
   const auto device_type = query_comp_desc.getDeviceType();
   const bool uses_lazy_fetch =
       plan_state_->allow_lazy_fetch_ &&
-      cider_executor::has_lazy_fetched_columns(cider_executor::getColLazyFetchInfo(ra_exe_unit.target_exprs, plan_state, catalog));
+      cider_executor::has_lazy_fetched_columns(cider_executor::getColLazyFetchInfo(
+          ra_exe_unit.target_exprs, plan_state, catalog));
   const bool use_multifrag_kernel = (device_type == ExecutorDeviceType::GPU) &&
                                     eo.allow_multifrag && (!uses_lazy_fetch || is_agg);
   const auto device_count = cider_executor::deviceCount(catalog, device_type);
@@ -3120,7 +3121,8 @@ std::vector<std::unique_ptr<ExecutionKernel>> CiderCodeGenerator::createKernels(
                                              g_inner_join_fragment_skipping,
                                              executor);
   if (eo.with_watchdog && fragment_descriptor.shouldCheckWorkUnitWatchdog()) {
-    cider_executor::checkWorkUnitWatchdog(ra_exe_unit, table_infos, *catalog, device_type, device_count);
+    cider_executor::checkWorkUnitWatchdog(
+        ra_exe_unit, table_infos, *catalog, device_type, device_count);
   }
 
   if (use_multifrag_kernel) {
@@ -3133,14 +3135,14 @@ std::vector<std::unique_ptr<ExecutionKernel>> CiderCodeGenerator::createKernels(
     // GPU, we want the multifrag kernel path to save the overhead of allocating an output
     // buffer per fragment.
     auto multifrag_kernel_dispatch = [&ra_exe_unit,
-        &execution_kernels,
-        &column_fetcher,
-        &eo,
-        &query_comp_desc,
-        &query_mem_desc,
-        render_info](const int device_id,
-                     const FragmentsList& frag_list,
-                     const int64_t rowid_lookup_key) {
+                                      &execution_kernels,
+                                      &column_fetcher,
+                                      &eo,
+                                      &query_comp_desc,
+                                      &query_mem_desc,
+                                      render_info](const int device_id,
+                                                   const FragmentsList& frag_list,
+                                                   const int64_t rowid_lookup_key) {
       execution_kernels.emplace_back(
           std::make_unique<ExecutionKernel>(ra_exe_unit,
                                             ExecutorDeviceType::GPU,
@@ -3174,16 +3176,16 @@ std::vector<std::unique_ptr<ExecutionKernel>> CiderCodeGenerator::createKernels(
 
     size_t frag_list_idx{0};
     auto fragment_per_kernel_dispatch = [&ra_exe_unit,
-        &execution_kernels,
-        &column_fetcher,
-        &eo,
-        &frag_list_idx,
-        &device_type,
-        &query_comp_desc,
-        &query_mem_desc,
-        render_info](const int device_id,
-                     const FragmentsList& frag_list,
-                     const int64_t rowid_lookup_key) {
+                                         &execution_kernels,
+                                         &column_fetcher,
+                                         &eo,
+                                         &frag_list_idx,
+                                         &device_type,
+                                         &query_comp_desc,
+                                         &query_mem_desc,
+                                         render_info](const int device_id,
+                                                      const FragmentsList& frag_list,
+                                                      const int64_t rowid_lookup_key) {
       if (!frag_list.size()) {
         return;
       }
