@@ -158,4 +158,5 @@ class ColumnFetcher {
 
   friend class QueryCompilationDescriptor;
   friend class TableFunctionExecutionContext;  // TODO(adb)
+  friend class CiderCodeGenerator;
 };

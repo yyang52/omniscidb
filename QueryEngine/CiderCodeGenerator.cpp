@@ -41,7 +41,28 @@ std::shared_ptr<CompilationContext> CiderCodeGenerator::optimizeAndCodegenCPU(
   }
 
   if (cgen_state->needs_geos_) {
+#ifdef ENABLE_GEOS
+    // load_geos_dynamic_library(); // not support now
+
+    // Read geos runtime module and bind GEOS API function references to GEOS library
+    auto rt_geos_module_copy = llvm::CloneModule(
+        *g_rt_geos_module.get(), cgen_state_->vmap_, [](const llvm::GlobalValue* gv) {
+          auto func = llvm::dyn_cast<llvm::Function>(gv);
+          if (!func) {
+            return true;
+          }
+          return (func->getLinkage() == llvm::GlobalValue::LinkageTypes::PrivateLinkage ||
+                  func->getLinkage() ==
+                      llvm::GlobalValue::LinkageTypes::InternalLinkage ||
+                  func->getLinkage() == llvm::GlobalValue::LinkageTypes::ExternalLinkage);
+        });
+    CodeGenerator::link_udf_module(rt_geos_module_copy,
+                                   *module,
+                                   cgen_state_.get(),
+                                   llvm::Linker::Flags::LinkOnlyNeeded);
+#else
     throw std::runtime_error("GEOS is disabled in this build");
+#endif
   }
 
   auto execution_engine = CodeGenerator::generateNativeCPUCode(
@@ -3189,3 +3210,495 @@ std::vector<std::unique_ptr<ExecutionKernel>> CiderCodeGenerator::createKernels(
 
   return execution_kernels;
 }
+namespace cider {
+// Returns true iff the execution unit contains window functions.
+bool is_window_execution_unit(const CiderRelAlgExecutionUnit& ra_exe_unit) {
+  return std::any_of(ra_exe_unit.target_exprs.begin(),
+                     ra_exe_unit.target_exprs.end(),
+                     [](const Analyzer::Expr* expr) {
+                       return dynamic_cast<const Analyzer::WindowFunction*>(expr);
+                     });
+}
+
+inline size_t get_count_distinct_sub_bitmap_count(
+    const size_t bitmap_sz_bits,
+    const CiderRelAlgExecutionUnit& ra_exe_unit,
+    const ExecutorDeviceType device_type) {
+  // For count distinct on a column with a very small number of distinct values
+  // contention can be very high, especially for non-grouped queries. We'll split
+  // the bitmap into multiple sub-bitmaps which are unified to get the full result.
+  // The threshold value for bitmap_sz_bits works well on Kepler.
+  return bitmap_sz_bits < 50000 && ra_exe_unit.groupby_exprs.empty() &&
+                 (device_type == ExecutorDeviceType::GPU || g_cluster)
+             ? 64  // NB: must be a power of 2 to keep runtime offset computations cheap
+             : 1;
+}
+
+CiderRelAlgExecutionUnit decide_approx_count_distinct_implementation(
+    const CiderRelAlgExecutionUnit& ra_exe_unit_in,
+    const std::vector<InputTableInfo>& table_infos,
+    const Executor* executor,
+    const ExecutorDeviceType device_type_in,
+    std::vector<std::shared_ptr<Analyzer::Expr>>& target_exprs_owned) {
+  CiderRelAlgExecutionUnit ra_exe_unit = ra_exe_unit_in;
+  for (size_t i = 0; i < ra_exe_unit.target_exprs.size(); ++i) {
+    const auto target_expr = ra_exe_unit.target_exprs[i];
+    const auto agg_info = get_target_info(target_expr, g_bigint_count);
+    if (agg_info.agg_kind != kAPPROX_COUNT_DISTINCT) {
+      continue;
+    }
+    CHECK(dynamic_cast<const Analyzer::AggExpr*>(target_expr));
+    const auto arg = static_cast<Analyzer::AggExpr*>(target_expr)->get_own_arg();
+    CHECK(arg);
+    const auto& arg_ti = arg->get_type_info();
+    // Avoid calling getExpressionRange for variable length types (string and array),
+    // it'd trigger an assertion since that API expects to be called only for types
+    // for which the notion of range is well-defined. A bit of a kludge, but the
+    // logic to reject these types anyway is at lower levels in the stack and not
+    // really worth pulling into a separate function for now.
+    if (!(arg_ti.is_number() || arg_ti.is_boolean() || arg_ti.is_time() ||
+          (arg_ti.is_string() && arg_ti.get_compression() == kENCODING_DICT))) {
+      continue;
+    }
+    const auto arg_range = getExpressionRange(arg.get(), table_infos, executor);
+    if (arg_range.getType() != ExpressionRangeType::Integer) {
+      continue;
+    }
+    // When running distributed, the threshold for using the precise implementation
+    // must be consistent across all leaves, otherwise we could have a mix of precise
+    // and approximate bitmaps and we cannot aggregate them.
+    const auto device_type = g_cluster ? ExecutorDeviceType::GPU : device_type_in;
+    const auto bitmap_sz_bits = arg_range.getIntMax() - arg_range.getIntMin() + 1;
+    const auto sub_bitmap_count = cider::get_count_distinct_sub_bitmap_count(
+        bitmap_sz_bits, ra_exe_unit, device_type);
+    int64_t approx_bitmap_sz_bits{0};
+    const auto error_rate =
+        static_cast<Analyzer::AggExpr*>(target_expr)->get_error_rate();
+    if (error_rate) {
+      CHECK(error_rate->get_type_info().get_type() == kINT);
+      CHECK_GE(error_rate->get_constval().intval, 1);
+      approx_bitmap_sz_bits = hll_size_for_rate(error_rate->get_constval().intval);
+    } else {
+      approx_bitmap_sz_bits = g_hll_precision_bits;
+    }
+    CountDistinctDescriptor approx_count_distinct_desc{CountDistinctImplType::Bitmap,
+                                                       arg_range.getIntMin(),
+                                                       approx_bitmap_sz_bits,
+                                                       true,
+                                                       device_type,
+                                                       sub_bitmap_count};
+    CountDistinctDescriptor precise_count_distinct_desc{CountDistinctImplType::Bitmap,
+                                                        arg_range.getIntMin(),
+                                                        bitmap_sz_bits,
+                                                        false,
+                                                        device_type,
+                                                        sub_bitmap_count};
+    if (approx_count_distinct_desc.bitmapPaddedSizeBytes() >=
+        precise_count_distinct_desc.bitmapPaddedSizeBytes()) {
+      auto precise_count_distinct = makeExpr<Analyzer::AggExpr>(
+          get_agg_type(kCOUNT, arg.get()), kCOUNT, arg, true, nullptr);
+      target_exprs_owned.push_back(precise_count_distinct);
+      ra_exe_unit.target_exprs[i] = precise_count_distinct.get();
+    }
+  }
+  return ra_exe_unit;
+}
+
+Fragmenter_Namespace::TableInfo copy_table_info(
+    const Fragmenter_Namespace::TableInfo& table_info) {
+  Fragmenter_Namespace::TableInfo table_info_copy;
+  table_info_copy.chunkKeyPrefix = table_info.chunkKeyPrefix;
+  table_info_copy.fragments = table_info.fragments;
+  table_info_copy.setPhysicalNumTuples(table_info.getPhysicalNumTuples());
+  return table_info_copy;
+}
+
+Fragmenter_Namespace::TableInfo synthesize_table_info(const ResultSetPtr& rows) {
+  std::vector<Fragmenter_Namespace::FragmentInfo> result;
+  if (rows) {
+    result.resize(1);
+    auto& fragment = result.front();
+    fragment.fragmentId = 0;
+    fragment.deviceIds.resize(3);
+    fragment.resultSet = rows.get();
+    fragment.resultSetMutex.reset(new std::mutex());
+  }
+  Fragmenter_Namespace::TableInfo table_info;
+  table_info.fragments = result;
+  return table_info;
+}
+
+void collect_table_infos(std::vector<InputTableInfo>& table_infos,
+                         const std::vector<InputDescriptor>& input_descs,
+                         Executor* executor) {
+  const auto temporary_tables = executor->getTemporaryTables();
+  const auto cat = executor->getCatalog();
+  CHECK(cat);
+  std::unordered_map<int, size_t> info_cache;
+  for (const auto& input_desc : input_descs) {
+    const auto table_id = input_desc.getTableId();
+    const auto cached_index_it = info_cache.find(table_id);
+    if (cached_index_it != info_cache.end()) {
+      CHECK_LT(cached_index_it->second, table_infos.size());
+      table_infos.push_back(
+          {table_id, copy_table_info(table_infos[cached_index_it->second].info)});
+      continue;
+    }
+    if (input_desc.getSourceType() == InputSourceType::RESULT) {
+      CHECK_LT(table_id, 0);
+      CHECK(temporary_tables);
+      const auto it = temporary_tables->find(table_id);
+      LOG_IF(FATAL, it == temporary_tables->end())
+          << "Failed to find previous query result for node " << -table_id;
+      table_infos.push_back({table_id, synthesize_table_info(it->second)});
+    } else {
+      CHECK(input_desc.getSourceType() == InputSourceType::TABLE);
+      table_infos.push_back({table_id, executor->getTableInfo(table_id)});
+    }
+    CHECK(!table_infos.empty());
+    info_cache.insert(std::make_pair(table_id, table_infos.size() - 1));
+  }
+}
+
+std::vector<InputTableInfo> get_table_infos(const RelAlgExecutionUnit& ra_exe_unit,
+                                            Executor* executor) {
+  INJECT_TIMER(get_table_infos);
+  std::vector<InputTableInfo> table_infos;
+  collect_table_infos(table_infos, ra_exe_unit.input_descs, executor);
+  return table_infos;
+}
+
+/**
+ * Determines whether a query needs to compute the size of its output buffer. Returns
+ * true for projection queries with no LIMIT or a LIMIT that exceeds the high scan limit
+ * threshold (meaning it would be cheaper to compute the number of rows passing or use
+ * the bump allocator than allocate the current scan limit per GPU)
+ */
+bool compute_output_buffer_size(const CiderRelAlgExecutionUnit& ra_exe_unit) {
+  for (const auto target_expr : ra_exe_unit.target_exprs) {
+    if (dynamic_cast<const Analyzer::AggExpr*>(target_expr)) {
+      return false;
+    }
+  }
+  if (ra_exe_unit.groupby_exprs.size() == 1 && !ra_exe_unit.groupby_exprs.front() &&
+      (!ra_exe_unit.scan_limit || ra_exe_unit.scan_limit > Executor::high_scan_limit)) {
+    return true;
+  }
+  return false;
+}
+
+inline bool exe_unit_has_quals(const CiderRelAlgExecutionUnit ra_exe_unit) {
+  return !(ra_exe_unit.quals.empty() && ra_exe_unit.join_quals.empty() &&
+           ra_exe_unit.simple_quals.empty());
+}
+
+bool isArchPascalOrLater(const ExecutorDeviceType dt,
+                         Catalog_Namespace::Catalog* catalog) {
+  if (dt == ExecutorDeviceType::GPU) {
+    const auto cuda_mgr = catalog->getDataMgr().getCudaMgr();
+    LOG_IF(FATAL, cuda_mgr == nullptr)
+        << "No CudaMgr instantiated, unable to check device architecture";
+    return cuda_mgr->isArchPascalOrLater();
+  }
+  return false;
+}
+
+ExecutorDeviceType getDeviceTypeForTargets(const CiderRelAlgExecutionUnit& ra_exe_unit,
+                                           const ExecutorDeviceType requested_device_type,
+                                           Catalog_Namespace::Catalog* catalog) {
+  for (const auto target_expr : ra_exe_unit.target_exprs) {
+    const auto agg_info = get_target_info(target_expr, g_bigint_count);
+    if (!ra_exe_unit.groupby_exprs.empty() &&
+        !isArchPascalOrLater(requested_device_type, catalog)) {
+      if ((agg_info.agg_kind == kAVG || agg_info.agg_kind == kSUM) &&
+          agg_info.agg_arg_type.get_type() == kDOUBLE) {
+        return ExecutorDeviceType::CPU;
+      }
+    }
+    if (dynamic_cast<const Analyzer::RegexpExpr*>(target_expr)) {
+      return ExecutorDeviceType::CPU;
+    }
+  }
+  return requested_device_type;
+}
+
+// Compute a very conservative entry count for the output buffer entry count using no
+// other information than the number of tuples in each table and multiplying them
+// together.
+size_t compute_buffer_entry_guess(const std::vector<InputTableInfo>& query_infos) {
+  using Fragmenter_Namespace::FragmentInfo;
+  // Check for overflows since we're multiplying potentially big table sizes.
+  using checked_size_t = boost::multiprecision::number<
+      boost::multiprecision::cpp_int_backend<64,
+                                             64,
+                                             boost::multiprecision::unsigned_magnitude,
+                                             boost::multiprecision::checked,
+                                             void>>;
+  checked_size_t max_groups_buffer_entry_guess = 1;
+  for (const auto& query_info : query_infos) {
+    CHECK(!query_info.info.fragments.empty());
+    auto it = std::max_element(query_info.info.fragments.begin(),
+                               query_info.info.fragments.end(),
+                               [](const FragmentInfo& f1, const FragmentInfo& f2) {
+                                 return f1.getNumTuples() < f2.getNumTuples();
+                               });
+    max_groups_buffer_entry_guess *= it->getNumTuples();
+  }
+  // Cap the rough approximation to 100M entries, it's unlikely we can do a great job for
+  // baseline group layout with that many entries anyway.
+  constexpr size_t max_groups_buffer_entry_guess_cap = 100000000;
+  try {
+    return std::min(static_cast<size_t>(max_groups_buffer_entry_guess),
+                    max_groups_buffer_entry_guess_cap);
+  } catch (...) {
+    return max_groups_buffer_entry_guess_cap;
+  }
+}
+
+bool isRowidLookup(const CiderWorkUnit& work_unit) {
+  // TODO:
+  // const auto& ra_exe_unit = work_unit.exe_unit;
+  // if (ra_exe_unit.input_descs.size() != 1) {
+  //   return false;
+  // }
+  // const auto& table_desc = ra_exe_unit.input_descs.front();
+  // if (table_desc.getSourceType() != InputSourceType::TABLE) {
+  //   return false;
+  // }
+  // const int table_id = table_desc.getTableId();
+  // for (const auto& simple_qual : ra_exe_unit.simple_quals) {
+  //   const auto comp_expr =
+  //       std::dynamic_pointer_cast<const Analyzer::BinOper>(simple_qual);
+  //   if (!comp_expr || comp_expr->get_optype() != kEQ) {
+  //     return false;
+  //   }
+  //   const auto lhs = comp_expr->get_left_operand();
+  //   const auto lhs_col = dynamic_cast<const Analyzer::ColumnVar*>(lhs);
+  //   if (!lhs_col || !lhs_col->get_table_id() || lhs_col->get_rte_idx()) {
+  //     return false;
+  //   }
+  //   const auto rhs = comp_expr->get_right_operand();
+  //   const auto rhs_const = dynamic_cast<const Analyzer::Constant*>(rhs);
+  //   if (!rhs_const) {
+  //     return false;
+  //   }
+  //   auto cd = get_column_descriptor(lhs_col->get_column_id(), table_id, cat_);
+  //   if (cd->isVirtualCol) {
+  //     CHECK_EQ("rowid", cd->columnName);
+  //     return true;
+  //   }
+  // }
+  return false;
+}
+
+std::tuple<CiderRelAlgExecutionUnit, PlanState::DeletedColumnsMap> addDeletedColumn(
+    const CiderRelAlgExecutionUnit& ra_exe_unit,
+    const CompilationOptions& co) {
+  // TODO: I didn't understand what is deleted_column...
+  return std::make_tuple(ra_exe_unit, PlanState::DeletedColumnsMap{});
+
+  // if (!co.filter_on_deleted_column) {
+  //   return std::make_tuple(ra_exe_unit, PlanState::DeletedColumnsMap{});
+  // }
+  // auto ra_exe_unit_with_deleted = ra_exe_unit;
+  // PlanState::DeletedColumnsMap deleted_cols_map;
+  // for (const auto& input_table : ra_exe_unit_with_deleted.input_descs) {
+  //   if (input_table.getSourceType() != InputSourceType::TABLE) {
+  //     continue;
+  //   }
+  //   const auto td = catalog_->getMetadataForTable(input_table.getTableId());
+  //   CHECK(td);
+  //   const auto deleted_cd = catalog_->getDeletedColumnIfRowsDeleted(td);
+  //   if (!deleted_cd) {
+  //     continue;
+  //   }
+  //   CHECK(deleted_cd->columnType.is_boolean());
+  //   // check deleted column is not already present
+  //   bool found = false;
+  //   for (const auto& input_col : ra_exe_unit_with_deleted.input_col_descs) {
+  //     if (input_col.get()->getColId() == deleted_cd->columnId &&
+  //         input_col.get()->getScanDesc().getTableId() == deleted_cd->tableId &&
+  //         input_col.get()->getScanDesc().getNestLevel() == input_table.getNestLevel())
+  //         {
+  //       found = true;
+  //       add_deleted_col_to_map(deleted_cols_map, deleted_cd);
+  //       break;
+  //     }
+  //   }
+  //   if (!found) {
+  //     // add deleted column
+  //     ra_exe_unit_with_deleted.input_col_descs.emplace_back(new InputColDescriptor(
+  //         deleted_cd->columnId, deleted_cd->tableId, input_table.getNestLevel()));
+  //     add_deleted_col_to_map(deleted_cols_map, deleted_cd);
+  //   }
+  // }
+  // return std::make_tuple(ra_exe_unit_with_deleted, deleted_cols_map);
+}
+
+// TODO: a work around to constrcut a RelAlgExecutionUnit .
+RelAlgExecutionUnit makeRelAlgExecutionUnit(const CiderRelAlgExecutionUnit& in) {
+  return {
+      std::vector<InputDescriptor>(),
+      std::list<std::shared_ptr<const InputColDescriptor>>(),
+      in.simple_quals,
+      in.quals,
+      in.join_quals,
+      in.groupby_exprs,
+      in.target_exprs,
+      in.estimator,
+      in.sort_info,
+      in.scan_limit,
+      in.query_hint,
+      in.use_bump_allocator,
+      in.union_all,
+      nullptr  // query_state
+  };
+}
+
+}  // namespace cider
+
+void CiderCodeGenerator::compileWorkUnit1(const CiderWorkUnit& work_unit,
+                                          const std::vector<TargetMetaInfo>& targets_meta,
+                                          const bool is_agg,
+                                          const CompilationOptions& co_in,
+                                          const ExecutionOptions& eo,
+                                          RenderInfo* render_info,
+                                          const int64_t queue_time_ms,
+                                          const std::optional<size_t> previous_count) {
+  INJECT_TIMER(executeWorkUnit);
+  auto timer = DEBUG_TIMER(__func__);
+
+  auto co = co_in;
+  ColumnCacheMap column_cache;
+  if (cider::is_window_execution_unit(work_unit.exe_unit)) {
+    // TODO: support window execution.
+    // if (!g_enable_window_functions) {
+    //   throw std::runtime_error("Window functions support is disabled");
+    // }
+    // co.device_type = ExecutorDeviceType::CPU;
+    // co.allow_lazy_fetch = false;
+    // computeWindow(work_unit.exe_unit, co, eo, column_cache, queue_time_ms);
+
+    throw std::runtime_error("Window functions support is disabled");
+  }
+  // ideally, join filter PD should be done in earlier step(eg. Spark )
+  if (!eo.just_explain && eo.find_push_down_candidates) {
+    // find potential candidates:
+    // auto selected_filters = selectFiltersToBePushedDown(work_unit, co, eo);
+    // if (!selected_filters.empty() || eo.just_calcite_explain) {
+    //   return ExecutionResult(selected_filters, eo.find_push_down_candidates);
+    // }
+    throw std::runtime_error("Not support Filter push down");
+  }
+  if (render_info && render_info->isPotentialInSituRender()) {
+    co.allow_lazy_fetch = false;
+  }
+  const auto body = work_unit.body;
+  CHECK(body);
+  auto it = leaf_results_.find(body->getId());
+  VLOG(3) << "body->getId()=" << body->getId() << " body->toString()=" << body->toString()
+          << " it==leaf_results_.end()=" << (it == leaf_results_.end());
+  if (it != leaf_results_.end()) {
+    // TODO: we should not step into here???
+    // GroupByAndAggregate::addTransientStringLiterals(
+    //     work_unit.exe_unit, executor_, executor_->row_set_mem_owner_);
+    // auto& aggregated_result = it->second;
+    // auto& result_rows = aggregated_result.rs;
+    // ExecutionResult result(result_rows, aggregated_result.targets_meta);
+    // body->setOutputMetainfo(aggregated_result.targets_meta);
+    // if (render_info) {
+    //   build_render_targets(*render_info, work_unit.exe_unit.target_exprs,
+    //   targets_meta);
+    // }
+    // return result;
+  }
+  // TODO!!!!!
+  auto tmp = cider::makeRelAlgExecutionUnit(work_unit.exe_unit);
+  const auto table_infos = cider::get_table_infos(tmp, executor_);
+
+  // TODO: suuport APPROX_COUNT_DISTINCT syntax
+  auto ra_exe_unit = work_unit.exe_unit;
+  // auto ra_exe_unit = cider::decide_approx_count_distinct_implementation(
+  // work_unit.exe_unit, table_infos, executor_, co.device_type, target_exprs_owned_);
+
+  // TODO: use defaults query hint.
+  ra_exe_unit.query_hint = RegisteredQueryHint::defaults();
+  // register query hint if query_dag_ is valid
+  // ra_exe_unit.query_hint =
+  //    query_dag_ ? query_dag_->getQueryHints() : RegisteredQueryHint::defaults();
+
+  auto max_groups_buffer_entry_guess = work_unit.max_groups_buffer_entry_guess;
+  if (cider::is_window_execution_unit(ra_exe_unit)) {
+    CHECK_EQ(table_infos.size(), size_t(1));
+    CHECK_EQ(table_infos.front().info.fragments.size(), size_t(1));
+    max_groups_buffer_entry_guess =
+        table_infos.front().info.fragments.front().getNumTuples();
+    ra_exe_unit.scan_limit = max_groups_buffer_entry_guess;
+  } else if (cider::compute_output_buffer_size(ra_exe_unit) &&
+             !cider::isRowidLookup(work_unit)) {
+    // TODO: in this clause, just need set `ra_exe_unit.scan_limit`
+    ra_exe_unit.scan_limit = 0;
+    // if (previous_count && !exe_unit_has_quals(ra_exe_unit)) {
+    //   ra_exe_unit.scan_limit = *previous_count;
+    // } else {
+    //   // TODO(adb): enable bump allocator path for render queries
+    //   if (can_use_bump_allocator(ra_exe_unit, co, eo) && !render_info) {
+    //     ra_exe_unit.scan_limit = 0;
+    //     ra_exe_unit.use_bump_allocator = true;
+    //   } else if (eo.executor_type == ::ExecutorType::Extern) {
+    //     ra_exe_unit.scan_limit = 0;
+    //   } else if (!eo.just_explain) {
+    //     const auto filter_count_all = getFilteredCountAll(work_unit, true, co, eo);
+    //     if (filter_count_all) {
+    //       ra_exe_unit.scan_limit = std::max(*filter_count_all, size_t(1));
+    //     }
+    //   }
+    // }
+  }
+
+  // max_groups_buffer_entry_guess_in and has_cardinality_estimation is pass from lambda
+  size_t max_groups_buffer_entry_guess_in = 0;
+  bool has_cardinality_estimation = false;
+  auto local_groups_buffer_entry_guess = max_groups_buffer_entry_guess_in;
+
+  const auto [ra_exe_unit_a, deleted_cols_map] = cider::addDeletedColumn(ra_exe_unit, co);
+  const auto device_type =
+      cider::getDeviceTypeForTargets(ra_exe_unit, co.device_type, catalog_);
+  CHECK(!table_infos.empty());
+  if (!local_groups_buffer_entry_guess) {
+    // The query has failed the first execution attempt because of running out
+    // of group by slots. Make the conservative choice: allocate fragment size
+    // slots and run on the CPU.
+    CHECK(device_type == ExecutorDeviceType::CPU);
+    local_groups_buffer_entry_guess = cider::compute_buffer_entry_guess(table_infos);
+  }
+
+  int8_t crt_min_byte_width{MAX_BYTE_WIDTH_SUPPORTED};
+
+  SharedKernelContext shared_context(table_infos);
+  ColumnFetcher column_fetcher(executor_, column_cache);
+  auto query_comp_desc_owned = std::make_unique<QueryCompilationDescriptor>();
+  std::unique_ptr<QueryMemoryDescriptor> query_mem_desc_owned;
+
+  INJECT_TIMER(query_step_compilation);  //??
+  auto clock_begin = timer_start();
+  // TODO : seems not used
+  // std::lock_guard<std::mutex> compilation_lock(compilation_mutex_);
+  metrics_->compilation_queue_time_ms_ += timer_stop(clock_begin);  //
+
+  auto ra_exe_unit_b = cider::makeRelAlgExecutionUnit(ra_exe_unit_a);
+  std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>> ret =
+      compileWorkUnit(table_infos,
+                      deleted_cols_map,
+                      ra_exe_unit_b,
+                      co,
+                      eo,
+                      catalog_->getDataMgr().getCudaMgr(),
+                      false,
+                      executor_->row_set_mem_owner_,
+                      local_groups_buffer_entry_guess,
+                      crt_min_byte_width,
+                      has_cardinality_estimation,
+                      column_fetcher.columnarized_table_cache_,  // private
+                      render_info);
+};

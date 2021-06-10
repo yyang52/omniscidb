@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include "CalciteDeserializerUtils.h"
 #include "CgenState.h"
 #include "CiderWorkUnit.h"
 #include "CodeGenerator.h"
@@ -28,6 +29,8 @@
 #include "QueryTemplateGenerator.h"
 #include "ScalarExprVisitor.h"
 
+#include "CudaMgr/CudaMgr.h"
+#include "Distributed/AggregatedResult.h"
 #include "Shared/MathUtils.h"
 
 #include <llvm/Bitcode/BitcodeReader.h>
@@ -160,7 +163,16 @@ class CiderCodeGenerator {
                                Executor* executor,
                                Catalog_Namespace::Catalog* catalog,
                                const unsigned block_size_x,
-                               const unsigned grid_size_x );
+                               const unsigned grid_size_x);
+
+  void compileWorkUnit1(const CiderWorkUnit& work_unit,
+                        const std::vector<TargetMetaInfo>& targets_meta,
+                        const bool is_agg,
+                        const CompilationOptions& co_in,
+                        const ExecutionOptions& eo,
+                        RenderInfo* render_info,
+                        const int64_t queue_time_ms,
+                        const std::optional<size_t> previous_count);
 
  private:
   CodeCache cpu_code_cache_;
@@ -173,4 +185,6 @@ class CiderCodeGenerator {
   const unsigned grid_size_x_ = 0;   // FIXME(Cheng) update via constructor
   std::shared_ptr<CiderMetrics> metrics_;
   // std::atomic<bool> interrupted_; FIXME(Cheng) no need for atomic? single threaded
+
+  std::unordered_map<unsigned, AggregatedResult> leaf_results_;
 };
