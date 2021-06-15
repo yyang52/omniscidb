@@ -74,6 +74,10 @@ struct CiderMetrics {
 
 class CiderCodeGenerator {
  public:
+  CiderCodeGenerator()
+    : cpu_code_cache_(0)
+    , gpu_code_cache_(0)
+    {}
   std::tuple<CompilationResult, std::unique_ptr<QueryMemoryDescriptor>> compileWorkUnit(
       const std::vector<InputTableInfo>& query_infos,
       const PlanState::DeletedColumnsMap& deleted_cols_map,
@@ -187,4 +191,5 @@ class CiderCodeGenerator {
   // std::atomic<bool> interrupted_; FIXME(Cheng) no need for atomic? single threaded
 
   std::unordered_map<unsigned, AggregatedResult> leaf_results_;
+  static const size_t code_cache_size{1000};
 };

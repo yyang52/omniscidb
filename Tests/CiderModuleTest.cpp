@@ -19,6 +19,8 @@
 #include "../QueryEngine/Execute.h"
 #include "../QueryEngine/InputMetadata.h"
 #include "../QueryRunner/QueryRunner.h"
+#include "../QueryEngine/ColumnFetcher.h"
+#include "../QueryEngine/CiderCodeGenerator.h"
 
 #ifndef BASE_PATH
 #define BASE_PATH "./tmp"
@@ -272,7 +274,17 @@ TEST_F(HighCardinalityStringEnv, BaselineNoFilters) {
       SQLTypeInfo(kBIGINT, false), kCOUNT, nullptr, false, nullptr);
   auto group_expr =
       makeExpr<Analyzer::ColumnVar>(cd->columnType, td->tableId, cd->columnId, 0);
-
+#if 0
+  CiderRelAlgExecutionUnit ra_exe_unit{
+                                  {simple_filter_expr},
+                                  {},
+                                  {},
+                                  {group_expr},
+                                  {count_expr.get()},
+                                  nullptr,
+                                  SortInfo{},
+                                  0};
+#else
   RelAlgExecutionUnit ra_exe_unit{input_descs,
                                   input_col_descs,
                                   {},
@@ -283,10 +295,44 @@ TEST_F(HighCardinalityStringEnv, BaselineNoFilters) {
                                   nullptr,
                                   SortInfo{},
                                   0};
+#endif
 
   ColumnCacheMap column_cache;
   size_t max_groups_buffer_entry_guess = 1;
   // no filters, so expect no throw w/out cardinality estimation
+#if 1
+  auto ccg = std::make_unique<CiderCodeGenerator>();
+  SharedKernelContext shared_context(table_infos);
+  int available_cpus = cpu_threads();
+  auto available_gpus = get_available_gpus(*cat);
+  const auto context_count =
+      get_context_count(ExecutorDeviceType::CPU, available_cpus, available_gpus.size());
+  ColumnFetcher column_fetcher(executor.get(), column_cache);
+  auto query_comp_desc_owned = std::make_unique<QueryCompilationDescriptor>();
+  std::unique_ptr<QueryMemoryDescriptor> query_mem_desc_owned;
+  RenderInfo* render_info = nullptr;
+  auto kernels =
+      ccg->createKernels(shared_context,
+          ra_exe_unit,
+          column_fetcher,
+          table_infos,
+          ExecutionOptions::defaults(),
+          /*is_agg=*/false,
+          /*allow_single_frag_table_opt=*/false,
+          context_count,
+          *query_comp_desc_owned,
+          *query_mem_desc_owned,
+          render_info,
+          available_gpus,
+          available_cpus,
+          nullptr,
+          cat,
+          executor.get()
+          );
+   for (auto& kernel : kernels) {
+       kernel->run(executor.get(), 1, shared_context);
+   }
+#else
   auto result =
       executor->executeWorkUnit(max_groups_buffer_entry_guess,
                                 /*is_agg=*/false,
@@ -310,6 +356,7 @@ TEST_F(HighCardinalityStringEnv, BaselineNoFilters) {
     EXPECT_EQ(row.size(), size_t(1));
     EXPECT_EQ(v<int64_t>(row[0]), 1);
   }
+#endif
 }
 
 int main(int argc, char** argv) {
