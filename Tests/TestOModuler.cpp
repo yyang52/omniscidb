@@ -43,7 +43,32 @@ TEST(TestOModuler, SimpleProject) {
 
   // std::unique_ptr<QueryMemoryDescriptor> qmd_ptr = res.compile();
 
-  EXPECT_EQ(1, 1);
+  auto res = CiderWorkUnit::createCiderWorkUnit(nullptr);
+  const char* json = "{\"rels\":[{\"id\":\"0\",\"relOp\":\"LogicalTableScan\",\"fieldNames\":[\"b\",\"dec\",\"d\",\"f\",\"m\",\"n\",\"o\",\"real_str\",\"str\",\"fx\",\"t\",\"x\",\"y\",\"z\"],\"table\":[\"CATALOG\",\"mapd\",\"test\"],\"inputs\":[]},{\"id\":\"1\",\"relOp\":\"LogicalProject\",\"fields\":[\"y\"],\"exprs\":[{\"input\":12}]},{\"id\":\"2\",\"relOp\":\"LogicalAggregate\",\"group\":[0],\"aggs\":[{\"agg\":\"COUNT\",\"type\":{\"type\":\"BIGINT\",\"nullable\":false},\"distinct\":false,\"operands\":[]}],\"fields\":[\"w\"]}]}";
+  rapidjson::Document q;
+  q.Parse(json);  
+  const auto& rels_ = field(q, "rels"); 
+  auto result= patcher.run(rels_);
+
+  std::cout<<"test,begin"<<std::endl;
+  std::shared_ptr<RelProject> logical_project = std::dynamic_pointer_cast<RelProject>(result[1]);
+  //RelAlgNode func test
+  EXPECT_EQ(logical_project->getId(),1);
+  EXPECT_EQ(logical_project->hasContextData(),0);
+  EXPECT_EQ(logical_project->isNop(),0);
+  EXPECT_EQ(logical_project->inputCount(),1);
+  EXPECT_EQ(logical_project->getOutputMetainfo().size(),0);
+  RelAlgNode* vanish = nullptr;
+  EXPECT_EQ(logical_project->hasInput(vanish),1);
+
+  //RelProject func test
+  EXPECT_EQ(logical_project->isSimple(),0);
+  EXPECT_EQ(logical_project->isIdentity(),0);
+  EXPECT_EQ(logical_project->isRenaming(),0);
+  EXPECT_EQ(logical_project->hasWindowFunctionExpr(),0);
+  EXPECT_EQ(logical_project->hasDeliveredHint(),0);
+  EXPECT_EQ(logical_project->size(),1);
+  EXPECT_EQ(logical_project->toString(),"RelProject([&RexAbstractInput(12)], [\"y\"])");
 }
 
 int main(int argc, char** argv) {
