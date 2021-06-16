@@ -311,6 +311,26 @@ TEST_F(HighCardinalityStringEnv, BaselineNoFilters) {
   auto query_comp_desc_owned = std::make_unique<QueryCompilationDescriptor>();
   std::unique_ptr<QueryMemoryDescriptor> query_mem_desc_owned;
   RenderInfo* render_info = nullptr;
+  int8_t crt_min_byte_width{MAX_BYTE_WIDTH_SUPPORTED};
+  const auto cuda_mgr = cat->getDataMgr().getCudaMgr();
+  PlanState::DeletedColumnsMap deleted_cols_map;
+  CompilationResult compilation_result;
+  std::tie(compilation_result, query_mem_desc_owned) =
+  ccg->compileWorkUnit(
+          table_infos,
+          deleted_cols_map,
+          ra_exe_unit,
+          CompilationOptions::defaults(ExecutorDeviceType::CPU),
+          ExecutionOptions::defaults(),
+          cuda_mgr,
+          /*allow_lazy_fetch=*/false,
+          executor->getRowSetMemoryOwner(),
+          max_groups_buffer_entry_guess,
+          crt_min_byte_width,
+          /*has_cardinality_estimation=*/false,
+          column_cache,
+          render_info
+      );
   auto kernels =
       ccg->createKernels(shared_context,
           ra_exe_unit,
