@@ -10,7 +10,6 @@ export BUILD_TYPE="release"
 
 export EXTRA_CMAKE_OPTIONS="$EXTRA_CMAKE_OPTIONS -DBoost_NO_BOOST_CMAKE=on"
 
-export DIR_="/home/kunshang/dev/omniscidb/scripts/conda/"
 . ${DIR_}/get_cxx_include_path.sh
 export CPLUS_INCLUDE_PATH=$(get_cxx_include_path)
 
