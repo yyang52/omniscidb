@@ -39,11 +39,10 @@ TEST(TestOModuler, SimpleProject) {
 
   CiderRelAlgDispatcher patcher();
 
-  auto res = CiderUnitModuler::createCiderUnitModuler(nullptr);
-
+//  auto res = CiderUnitModuler::createCiderUnitModuler(nullptr);
   // std::unique_ptr<QueryMemoryDescriptor> qmd_ptr = res.compile();
+//  auto res = CiderWorkUnit::createCiderWorkUnit(nullptr);
 
-  auto res = CiderWorkUnit::createCiderWorkUnit(nullptr);
   const char* json = "{\"rels\":[{\"id\":\"0\",\"relOp\":\"LogicalTableScan\",\"fieldNames\":[\"b\",\"dec\",\"d\",\"f\",\"m\",\"n\",\"o\",\"real_str\",\"str\",\"fx\",\"t\",\"x\",\"y\",\"z\"],\"table\":[\"CATALOG\",\"mapd\",\"test\"],\"inputs\":[]},{\"id\":\"1\",\"relOp\":\"LogicalProject\",\"fields\":[\"y\"],\"exprs\":[{\"input\":12}]},{\"id\":\"2\",\"relOp\":\"LogicalAggregate\",\"group\":[0],\"aggs\":[{\"agg\":\"COUNT\",\"type\":{\"type\":\"BIGINT\",\"nullable\":false},\"distinct\":false,\"operands\":[]}],\"fields\":[\"w\"]}]}";
   rapidjson::Document q;
   q.Parse(json);  
