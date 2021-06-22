@@ -65,8 +65,8 @@ export CPLUS_INCLUDE_PATH=$(get_cxx_include_path)
 # generate ~/.m2/settings.xml if proxy are set and there are no settings
 [ -f ~/.m2/settings.xml -o -z "$http_proxy" ] || python ${RECIPE_DIR}/make-m2-proxy.py
 
-mkdir -p build-p
-cd build-p
+mkdir -p build
+cd build
 
 cmake -Wno-dev \
     -DCMAKE_PREFIX_PATH=$PREFIX \
