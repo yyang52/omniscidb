@@ -2864,7 +2864,6 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
     llvm_ir += cider::serialize_llvm_metadata_footnotes(query_func, cgen_state_.get());
 #endif
   }
-
   LOG(IR) << "\n\n" << query_mem_desc->toString() << "\n";
   LOG(IR) << "IR for the "
           << (co.device_type == ExecutorDeviceType::CPU ? "CPU:\n" : "GPU:\n");
