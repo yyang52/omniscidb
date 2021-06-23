@@ -59,5 +59,5 @@ class CiderRelAlgDispatcher {
   std::vector<std::shared_ptr<RelAlgNode>> nodes_;
 };
 void check_empty_inputs_field(const rapidjson::Value& node);
-const TableDescriptor* getTableFromScanNode(const rapidjson::Value& scan_ra, MetaDesc meta);
+const TableDescriptor* getTableFromScanNode(const rapidjson::Value& scan_ra, const MetaDesc meta);
 std::vector<std::string> getFieldNamesFromScanNode(const rapidjson::Value& scan_ra);

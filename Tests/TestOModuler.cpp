@@ -72,7 +72,6 @@ TEST(TestOModuler, SimpleProject) {
   
   rapidjson::Document q;
   q.Parse(json);  
-  std::cout<<"1"<<std::endl;
   const auto& rels_ = field(q, "rels"); 
   auto result= patcher.run(rels_,meta);
 

@@ -415,7 +415,7 @@ std::vector<std::shared_ptr<RelAlgNode>> CiderRelAlgDispatcher::run(
     } else if (rel_op == std::string("LogicalUnion")) {
       ra_node = dispatchUnion(crt_node);
     } else if (rel_op == std::string("EnumerableTableScan") ||
-      rel_op == std::string("LogicalTableScan")) {
+        rel_op == std::string("LogicalTableScan")) {
       ra_node = dispatchTableScan(crt_node,meta);
     } else {
       throw QueryNotSupported(std::string("Node ") + rel_op + " not supported yet");
@@ -741,7 +741,6 @@ const TableDescriptor* getTableFromScanNode(const rapidjson::Value& scan_ra, con
   CHECK(td);
   return td;
 }
-
 void check_empty_inputs_field(const rapidjson::Value& node) {
   const auto& inputs_json = field(node, "inputs");
   CHECK(inputs_json.IsArray() && !inputs_json.Size());
