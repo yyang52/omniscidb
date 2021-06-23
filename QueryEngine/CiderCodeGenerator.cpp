@@ -15,6 +15,7 @@
 #include "CiderCodeGenerator.h"
 
 extern std::unique_ptr<llvm::Module> g_rt_module;
+extern std::unique_ptr<llvm::Module> g_rt_geos_module;
 extern std::unique_ptr<llvm::Module> udf_cpu_module;
 extern std::unique_ptr<llvm::Module> udf_gpu_module;
 extern std::unique_ptr<llvm::Module> rt_udf_cpu_module;
