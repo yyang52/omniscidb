@@ -392,7 +392,7 @@ JoinType to_join_type(const std::string& join_type_name) {
 }
 
 std::vector<std::shared_ptr<RelAlgNode>> CiderRelAlgDispatcher::run(
-    const rapidjson::Value& rels) {
+    const rapidjson::Value& rels, MetaDesc meta) {
   for (auto rels_it = rels.Begin(); rels_it != rels.End(); ++rels_it) {
     const auto& crt_node = *rels_it;
     const auto id = node_id(crt_node);
@@ -414,6 +414,10 @@ std::vector<std::shared_ptr<RelAlgNode>> CiderRelAlgDispatcher::run(
       ra_node = dispatchLogicalValues(crt_node);
     } else if (rel_op == std::string("LogicalUnion")) {
       ra_node = dispatchUnion(crt_node);
+    } else if (rel_op == std::string("EnumerableTableScan") ||
+        rel_op == std::string("LogicalTableScan")) {
+        std::cout<<"LogicalTableScan,begin"<<std::endl;
+        ra_node = dispatchTableScan(crt_node,meta);
     } else {
       throw QueryNotSupported(std::string("Node ") + rel_op + " not supported yet");
     }
@@ -421,6 +425,19 @@ std::vector<std::shared_ptr<RelAlgNode>> CiderRelAlgDispatcher::run(
   }
 
   return std::move(nodes_);
+}
+
+std::shared_ptr<RelScan> CiderRelAlgDispatcher::dispatchTableScan(const rapidjson::Value& scan_ra, MetaDesc meta) {
+  check_empty_inputs_field(scan_ra);
+  CHECK(scan_ra.IsObject());
+  const auto td = getTableFromScanNode(scan_ra,meta);
+  const auto field_names = getFieldNamesFromScanNode(scan_ra);
+  if (scan_ra.HasMember("hints")) {
+    auto scan_node = std::make_shared<RelScan>(td, field_names);
+    getRelAlgHints(scan_ra, scan_node);
+    return scan_node;
+  }
+  return std::make_shared<RelScan>(td, field_names);
 }
 
 std::shared_ptr<RelProject> CiderRelAlgDispatcher::dispatchProject(
@@ -715,4 +732,26 @@ std::shared_ptr<const RelAlgNode> CiderRelAlgDispatcher::prev(
   CHECK(id);
   CHECK_EQ(static_cast<size_t>(id), nodes_.size());
   return nodes_.back();
+}
+
+const TableDescriptor* getTableFromScanNode(const rapidjson::Value& scan_ra, MetaDesc meta) {
+  std::cout<<"2"<<std::endl;
+  const auto& table_json = field(scan_ra, "table");
+  CHECK(table_json.IsArray());
+  CHECK_EQ(unsigned(2), table_json.Size());
+  const auto td = meta.getData(table_json[1].GetString());
+  CHECK(td);
+  return td;
+}
+
+void check_empty_inputs_field(const rapidjson::Value& node) {
+  std::cout<<"3"<<std::endl;
+  const auto& inputs_json = field(node, "inputs");
+  CHECK(inputs_json.IsArray() && !inputs_json.Size());
+}
+std::vector<std::string> getFieldNamesFromScanNode(const rapidjson::Value& scan_ra) {
+  std::cout<<"4"<<std::endl;
+  const auto& fields_json = field(scan_ra, "fieldNames");
+  std::cout<<"5"<<std::endl;
+  return strings_from_json_array(fields_json);
 }

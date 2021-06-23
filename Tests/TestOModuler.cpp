@@ -18,11 +18,11 @@
 
 #include "TestHelpers.h"
 #include "Logger/Logger.h"
+#include "QueryEngine/catalogApi.h"
 
 // #include "QueryEngine/OModuler.h"
 #include "QueryEngine/CiderRelAlgDispatcher.h"
 #include "QueryEngine/CiderWorkUnit.h"
-
 TEST(TestOModuler, SimpleProject) {
   // Catalog_Namespace::Catalog cat = Catalog_Namespace::Catalog();
   // details::RelAlgDispatcher dp(cat);
@@ -36,19 +36,43 @@ TEST(TestOModuler, SimpleProject) {
   //   inputData = OMModules::Data.convert(bufferFromDS, context) outputData =
   //       workUnit.executeWithData(inputData, context)
   // }
+  TableDescriptor table1;
+  TableDescriptor table2;
+  TableDescriptor table3;
+  table1.tableName = "CATALOG";
+  table2.tableName = "mapd";
+  table3.tableName = "test";
+  auto tbPtr1 = &table1;
+  auto tbPtr2 = &table2;
+  auto tbPtr3 = &table3;
+  MetaDesc meta;
+  meta.buildData("CATALOG",tbPtr1);
+  meta.buildData("mapd",tbPtr2);
+  //meta.buildData("test",tbPtr3);
 
-  CiderRelAlgDispatcher patcher();
+
+
+
+
+
+
+
+
+
+
+  CiderRelAlgDispatcher patcher;
 
   auto res = CiderUnitModuler::createCiderUnitModuler(nullptr);
 
   // std::unique_ptr<QueryMemoryDescriptor> qmd_ptr = res.compile();
 
-  auto res = CiderWorkUnit::createCiderWorkUnit(nullptr);
-  const char* json = "{\"rels\":[{\"id\":\"0\",\"relOp\":\"LogicalTableScan\",\"fieldNames\":[\"b\",\"dec\",\"d\",\"f\",\"m\",\"n\",\"o\",\"real_str\",\"str\",\"fx\",\"t\",\"x\",\"y\",\"z\"],\"table\":[\"CATALOG\",\"mapd\",\"test\"],\"inputs\":[]},{\"id\":\"1\",\"relOp\":\"LogicalProject\",\"fields\":[\"y\"],\"exprs\":[{\"input\":12}]},{\"id\":\"2\",\"relOp\":\"LogicalAggregate\",\"group\":[0],\"aggs\":[{\"agg\":\"COUNT\",\"type\":{\"type\":\"BIGINT\",\"nullable\":false},\"distinct\":false,\"operands\":[]}],\"fields\":[\"w\"]}]}";
+  //auto res = CiderWorkUnit::createCiderWorkUnit(nullptr);
+  const char* json = "{\"rels\":[{\"id\":\"0\",\"relOp\":\"LogicalTableScan\",\"fieldNames\":[\"b\",\"dec\",\"d\",\"f\",\"m\",\"n\",\"o\",\"real_str\",\"str\",\"fx\",\"t\",\"x\",\"y\",\"z\"],\"table\":[\"CATALOG\",\"mapd\"],\"inputs\":[]},{\"id\":\"1\",\"relOp\":\"LogicalProject\",\"fields\":[\"y\"],\"exprs\":[{\"input\":12}]},{\"id\":\"2\",\"relOp\":\"LogicalAggregate\",\"group\":[0],\"aggs\":[{\"agg\":\"COUNT\",\"type\":{\"type\":\"BIGINT\",\"nullable\":false},\"distinct\":false,\"operands\":[]}]}]}";
   rapidjson::Document q;
   q.Parse(json);  
+  std::cout<<"1"<<std::endl;
   const auto& rels_ = field(q, "rels"); 
-  auto result= patcher.run(rels_);
+  auto result= patcher.run(rels_,meta);
 
   std::cout<<"test,begin"<<std::endl;
   std::shared_ptr<RelProject> logical_project = std::dynamic_pointer_cast<RelProject>(result[1]);

@@ -193,3 +193,4 @@ class CiderCodeGenerator {
   std::unordered_map<unsigned, AggregatedResult> leaf_results_;
   static const size_t code_cache_size{1000};
 };
+
