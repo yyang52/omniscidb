@@ -2860,9 +2860,9 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
         (cgen_state_->filter_func_ ? serialize_llvm_object(cgen_state_->filter_func_)
                                    : "");
 
-// #ifndef NDEBUG
-//     llvm_ir += serialize_llvm_metadata_footnotes(query_func, cgen_state_.get());
-// #endif
+#ifndef NDEBUG
+    llvm_ir += cider::serialize_llvm_metadata_footnotes(query_func, cgen_state_.get());
+#endif
   }
 
   LOG(IR) << "\n\n" << query_mem_desc->toString() << "\n";
