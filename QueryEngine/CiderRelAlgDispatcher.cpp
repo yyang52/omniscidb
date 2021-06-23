@@ -733,8 +733,7 @@ std::shared_ptr<const RelAlgNode> CiderRelAlgDispatcher::prev(
   return nodes_.back();
 }
 
-const TableDescriptor* getTableFromScanNode(const rapidjson::Value& scan_ra, MetaDesc meta) {
-  std::cout<<"2"<<std::endl;
+const TableDescriptor* getTableFromScanNode(const rapidjson::Value& scan_ra, const MetaDesc meta) {
   const auto& table_json = field(scan_ra, "table");
   CHECK(table_json.IsArray());
   CHECK_EQ(unsigned(2), table_json.Size());
@@ -744,13 +743,10 @@ const TableDescriptor* getTableFromScanNode(const rapidjson::Value& scan_ra, Met
 }
 
 void check_empty_inputs_field(const rapidjson::Value& node) {
-  std::cout<<"3"<<std::endl;
   const auto& inputs_json = field(node, "inputs");
   CHECK(inputs_json.IsArray() && !inputs_json.Size());
 }
 std::vector<std::string> getFieldNamesFromScanNode(const rapidjson::Value& scan_ra) {
-  std::cout<<"4"<<std::endl;
   const auto& fields_json = field(scan_ra, "fieldNames");
-  std::cout<<"5"<<std::endl;
   return strings_from_json_array(fields_json);
 }
