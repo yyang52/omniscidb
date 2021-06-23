@@ -415,9 +415,8 @@ std::vector<std::shared_ptr<RelAlgNode>> CiderRelAlgDispatcher::run(
     } else if (rel_op == std::string("LogicalUnion")) {
       ra_node = dispatchUnion(crt_node);
     } else if (rel_op == std::string("EnumerableTableScan") ||
-        rel_op == std::string("LogicalTableScan")) {
-        std::cout<<"LogicalTableScan,begin"<<std::endl;
-        ra_node = dispatchTableScan(crt_node,meta);
+      rel_op == std::string("LogicalTableScan")) {
+      ra_node = dispatchTableScan(crt_node,meta);
     } else {
       throw QueryNotSupported(std::string("Node ") + rel_op + " not supported yet");
     }
