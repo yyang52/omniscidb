@@ -29,7 +29,6 @@
 #include <unordered_set>
 #include <vector>
 
-
 class CiderRelAlgDispatcher {
  public:
   CiderRelAlgDispatcher() {};
