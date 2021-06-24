@@ -20,7 +20,7 @@ extern std::unique_ptr<llvm::Module> udf_cpu_module;
 extern std::unique_ptr<llvm::Module> udf_gpu_module;
 extern std::unique_ptr<llvm::Module> rt_udf_cpu_module;
 extern std::unique_ptr<llvm::Module> rt_udf_gpu_module;
-
+extern std::unique_ptr<llvm::Module> g_rt_geos_module;
 std::shared_ptr<CompilationContext> CiderCodeGenerator::optimizeAndCodegenCPU(
     llvm::Function* query_func,
     llvm::Function* multifrag_query_func,
@@ -2861,10 +2861,9 @@ CiderCodeGenerator::compileWorkUnit(const std::vector<InputTableInfo>& query_inf
                                    : "");
 
 #ifndef NDEBUG
-    llvm_ir += serialize_llvm_metadata_footnotes(query_func, cgen_state_.get());
+    llvm_ir += cider::serialize_llvm_metadata_footnotes(query_func, cgen_state_.get());
 #endif
   }
-
   LOG(IR) << "\n\n" << query_mem_desc->toString() << "\n";
   LOG(IR) << "IR for the "
           << (co.device_type == ExecutorDeviceType::CPU ? "CPU:\n" : "GPU:\n");

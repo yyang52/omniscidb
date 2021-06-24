@@ -22,6 +22,7 @@
 #include "CalciteDeserializerUtils.h"
 #include "JsonAccessors.h"
 #include "RelAlgDagBuilder.h"
+#include "catalogApi.h"
 
 #include <memory>
 #include <string>
@@ -30,12 +31,13 @@
 
 class CiderRelAlgDispatcher {
  public:
-  CiderRelAlgDispatcher() {}
+  CiderRelAlgDispatcher() {};
   // todo: we need data type.
-  std::vector<std::shared_ptr<RelAlgNode>> run(const rapidjson::Value& rels);
+  std::vector<std::shared_ptr<RelAlgNode>> run(const rapidjson::Value& rels, MetaDesc meta);
 
  private:
   // TODO: placeholder replace Scan
+  std::shared_ptr<RelScan> dispatchTableScan(const rapidjson::Value& scan_ra, MetaDesc meta);
 
   std::shared_ptr<RelProject> dispatchProject(const rapidjson::Value& proj_ra);
 
@@ -56,3 +58,6 @@ class CiderRelAlgDispatcher {
 
   std::vector<std::shared_ptr<RelAlgNode>> nodes_;
 };
+void check_empty_inputs_field(const rapidjson::Value& node);
+const TableDescriptor* getTableFromScanNode(const rapidjson::Value& scan_ra, const MetaDesc meta);
+std::vector<std::string> getFieldNamesFromScanNode(const rapidjson::Value& scan_ra);
