@@ -613,6 +613,77 @@ std::shared_ptr<ExecutionResult> run_select_query_with_filter_push_down(
 
 }  // namespace
 
+void QueryRunner::runSelectQueryByIterator(
+    const std::string& query_str,
+    const ExecutorDeviceType device_type,
+    const bool hoist_literals,
+    const bool allow_loop_joins,
+    const bool just_explain,
+    const std::shared_ptr<CiderResultProvider> res_provider) {
+  auto co = CompilationOptions::defaults(device_type);
+  co.hoist_literals = hoist_literals;
+  runSelectQueryByIterator(query_str,
+                 std::move(co),
+                 defaultExecutionOptionsForRunSQL(allow_loop_joins, just_explain),
+                 res_provider);
+};
+
+std::shared_ptr<ExecutionResult> QueryRunner::runSelectQueryByIterator(
+    const std::string& query_str,
+    CompilationOptions co,
+    ExecutionOptions eo,
+    const std::shared_ptr<CiderResultProvider> res_provider) {
+  CHECK(session_info_);
+  CHECK(!Catalog_Namespace::SysCatalog::instance().isAggregator());
+  auto query_state = create_query_state(session_info_, query_str);
+  auto stdlog = STDLOG(query_state);
+  if (g_enable_filter_push_down) {
+    return run_select_query_with_filter_push_down(query_state->createQueryStateProxy(),
+                                                  co.device_type,
+                                                  co.hoist_literals,
+                                                  eo.allow_loop_joins,
+                                                  eo.just_explain,
+                                                  g_enable_filter_push_down);
+  }
+
+  const auto& cat = session_info_->getCatalog();
+
+  std::shared_ptr<ExecutionResult> result;
+  auto query_launch_task = std::make_shared<QueryDispatchQueue::Task>(
+      [&cat, &query_str, &co, &eo, &query_state, &result](const size_t worker_id) {
+        auto executor = Executor::getExecutor(worker_id);
+        // TODO The next line should be deleted since it overwrites co, but then
+        // NycTaxiTest.RunSelectsEncodingDictWhereGreater fails due to co not getting
+        // reset to its default values.
+        co = CompilationOptions::defaults(co.device_type);
+        co.opt_level = ExecutorOptLevel::LoopStrengthReduction;
+        auto calcite_mgr = cat.getCalciteMgr();
+        const auto query_ra = calcite_mgr
+                                  ->process(query_state->createQueryStateProxy(),
+                                            pg_shim(query_str),
+                                            {},
+                                            true,
+                                            false,
+                                            g_enable_calcite_view_optimize,
+                                            true)
+                                  .plan_result;
+        auto ra_executor = RelAlgExecutor(executor.get(), cat, query_ra);
+        const auto& query_hints = ra_executor.getParsedQueryHints();
+        const bool cpu_mode_enabled = query_hints.isHintRegistered(QueryHint::kCpuMode);
+        if (cpu_mode_enabled) {
+          co.device_type = ExecutorDeviceType::CPU;
+        }
+        result = std::make_shared<ExecutionResult>(
+            ra_executor.executeRelAlgQuery(co, eo, false, nullptr));
+      });
+  CHECK(dispatch_queue_);
+  dispatch_queue_->submit(query_launch_task, /*is_update_delete=*/false);
+  auto result_future = query_launch_task->get_future();
+  result_future.get();
+  CHECK(result);
+  return result;
+}
+
 std::shared_ptr<ExecutionResult> QueryRunner::runSelectQuery(const std::string& query_str,
                                                              CompilationOptions co,
                                                              ExecutionOptions eo) {

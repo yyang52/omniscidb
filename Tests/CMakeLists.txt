@@ -78,6 +78,7 @@ add_executable(TableFunctionsTest TableFunctionsTest.cpp)
 add_executable(ArrayTest ArrayTest.cpp)
 add_executable(HighCardinalityGroupByTest HighCardinalityGroupByTest.cpp)
 add_executable(ParallelExecutorsTest ParallelExecutorsTest.cpp)
+add_executable(IterativeExecutionTest IterativeExecutionTest.cpp)
 add_executable(MigrationMgrTest MigrationMgrTest.cpp)
 add_executable(TopKTest TopKTest.cpp)
 add_executable(TokenCompletionHintsTest TokenCompletionHintsTest.cpp)
@@ -151,6 +152,7 @@ target_link_libraries(ComputeMetadataTest ${THRIFT_HANDLER_TEST_LIBRARIES})
 target_link_libraries(TableFunctionsTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(ArrayTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(ParallelExecutorsTest ${EXECUTE_TEST_LIBS})
+target_link_libraries(IterativeExecutionTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(HighCardinalityGroupByTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(MigrationMgrTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(BumpAllocatorTest ${EXECUTE_TEST_LIBS})
@@ -251,6 +253,7 @@ add_test(SpecialCharsTest SpecialCharsTest ${TEST_ARGS})
 add_test(TableFunctionsTest TableFunctionsTest ${TEST_ARGS})
 add_test(ArrayTest ArrayTest ${TEST_ARGS})
 add_test(ParallelExecutorsTest ParallelExecutorsTest ${TEST_ARGS})
+add_test(IterativeExecutionTest IterativeExecutionTest ${TEST_ARGS})
 add_test(HighCardinalityGroupByTest HighCardinalityGroupByTest ${TEST_ARGS})
 add_test(MigrationMgrTest MigrationMgrTest ${TEST_ARGS})
 add_test(StoragePerfTest StoragePerfTest ${TEST_ARGS})
@@ -342,6 +345,7 @@ set(TEST_PROGRAMS
   ArrayTest
   HighCardinalityGroupByTest
   ParallelExecutorsTest
+  IterativeExecutionTest
   MigrationMgrTest
   TopKTest
   TokenCompletionHintsTest

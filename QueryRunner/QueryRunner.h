@@ -33,6 +33,7 @@
 #include "QueryEngine/QueryDispatchQueue.h"
 #include "QueryEngine/QueryHint.h"
 #include "ThriftHandler/QueryState.h"
+#include "QueryEngine/CiderResultProvider.h"
 
 namespace Catalog_Namespace {
 class Catalog;
@@ -153,6 +154,30 @@ class QueryRunner {
       const bool hoist_literals,
       const bool allow_loop_joins,
       const bool just_explain = false);
+
+  virtual std::shared_ptr<ExecutionResult> runSelectQueryByIterator(
+      const std::string& query_str,
+      CompilationOptions co,
+      ExecutionOptions eo,
+      const std::shared_ptr<CiderResultProvider> res_provider);
+
+  /**
+   * Cider to support iterator execution fashion, each time emit a consumer
+   * @param query_str
+   * @param device_type
+   * @param hoist_literals
+   * @param allow_loop_joins
+   * @param just_explain
+   * @param res_provider provider of result iterator
+   */
+  virtual void runSelectQueryByIterator(
+      const std::string& query_str,
+      const ExecutorDeviceType device_type,
+      const bool hoist_literals,
+      const bool allow_loop_joins,
+      const bool just_explain = false,
+      const std::shared_ptr<CiderResultProvider> res_provider = nullptr);
+
   virtual std::shared_ptr<ResultSet> runSQLWithAllowingInterrupt(
       const std::string& query_str,
       const std::string& session_id,
