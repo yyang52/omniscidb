@@ -155,7 +155,7 @@ class QueryRunner {
       const bool allow_loop_joins,
       const bool just_explain = false);
 
-  virtual std::shared_ptr<ExecutionResult> runSelectQueryByIterator(
+  virtual void runSelectQueryByIterator(
       const std::string& query_str,
       CompilationOptions co,
       ExecutionOptions eo,

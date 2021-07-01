@@ -21,6 +21,7 @@
 #include "../QueryEngine/Descriptors/RelAlgExecutionDescriptor.h"
 #include "../QueryEngine/Execute.h"
 #include "../QueryRunner/QueryRunner.h"
+#include "../QueryEngine/CiderResultProvider.h"
 
 #include <array>
 #include <future>
@@ -38,6 +39,7 @@ size_t g_num_tables{25};
 extern bool g_is_test_env;
 
 using QR = QueryRunner::QueryRunner;
+
 using namespace TestHelpers;
 
 bool skip_tests(const ExecutorDeviceType device_type) {
@@ -60,14 +62,16 @@ inline void run_ddl_statement(const std::string& input_str) {
 }
 
 TargetValue run_simple_agg_itr(const std::string& query_str, const ExecutorDeviceType dt) {
-  auto rows = QR::get()
-      ->runSelectQuery(query_str,
+  auto res_provider_ptr = std::make_shared<CiderResultProvider>();
+  QR::get()
+      ->runSelectQueryByIterator(query_str,
                        dt,
           /*hoist_literals=*/true,
           /*allow_loop_joins=*/false,
-          /*just_explain=*/false)
-      ->getRows();
-  auto crt_row = rows->getNextRow(true, true);
+          /*just_explain=*/false,
+          /* result provider */res_provider_ptr);
+  auto res = res_provider_ptr->getIterator()->next();
+  auto crt_row = res->getRows()->getNextRow(true, true);
   CHECK_EQ(size_t(1), crt_row.size()) << query_str;
   return crt_row[0];
 }
@@ -234,7 +238,7 @@ class SingleTableTestEnv : public ::testing::Test {
   }
 };
 
-TEST_F(SingleTableTestEnv, IteratorExecution) {
+TEST_F(SingleTableTestEnv, IterativeExecution) {
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
     SKIP_NO_GPU();
 

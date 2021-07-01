@@ -15,9 +15,16 @@
 #include "CiderResultProvider.h"
 
 std::shared_ptr<ExecutionResult> CiderResultIterator::next() {
-  return nullptr;
+  return exec_res_;
+}
+
+bool CiderResultProvider::registerExecRunner(std::shared_ptr<ExecutionResult> exec_res) {
+  exec_res_ = exec_res;
+  isExecRunnerRegistered_ = true;
+  return isExecRunnerRegistered_;
 }
 
 std::shared_ptr<CiderResultIterator> CiderResultProvider::getIterator() {
-  return nullptr;
+  CHECK(isExecRunnerRegistered_);
+  return std::make_shared<CiderResultIterator>(exec_res_);
 }

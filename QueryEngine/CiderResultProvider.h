@@ -15,18 +15,37 @@
 #ifndef OMNISCI_CIDERRESULTPROVIDER_H
 #define OMNISCI_CIDERRESULTPROVIDER_H
 
-#include "QueryRunner/QueryRunner.h"
-
-class ExecutionResult;
+#include "QueryEngine/Descriptors/RelAlgExecutionDescriptor.h"
 
 class CiderResultIterator {
  public:
+  CiderResultIterator(std::shared_ptr<ExecutionResult> exec_res):exec_res_(exec_res){};
   std::shared_ptr<ExecutionResult> next();
+ private:
+  std::shared_ptr<ExecutionResult> exec_res_;
 };
 
 class CiderResultProvider {
  public:
+  /**
+   * Build the iterator with execution function
+   * @return whether function is registered successfully
+   */
+  bool registerExecRunner(std::shared_ptr<ExecutionResult> exec_res);
+
+  /**
+   * Build the iterator  pass in options
+   * Optional to build iterator and default is OmnisciDB built-in data typed
+   * @return whether output data convertor is registered successfully
+   */
+  bool registerOutputConvertor();
+
   std::shared_ptr<CiderResultIterator> getIterator();
+
+ private:
+  std::shared_ptr<ExecutionResult> exec_res_;
+  bool isExecRunnerRegistered_ = false;
+  bool isOutputConvertorRegistered_ = false;
 };
 
 #endif  // OMNISCI_CIDERRESULTPROVIDER_H
