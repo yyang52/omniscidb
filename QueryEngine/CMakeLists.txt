@@ -28,8 +28,7 @@ set(query_engine_source_files
     CardinalityEstimator.cpp
     CaseIR.cpp
     CastIR.cpp
-    CiderResultProvider.cpp
-    CgenState.cpp
+        CgenState.cpp
     Codec.cpp
     ColumnarResults.cpp
     ColumnFetcher.cpp

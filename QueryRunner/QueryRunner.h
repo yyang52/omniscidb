@@ -33,7 +33,6 @@
 #include "QueryEngine/QueryDispatchQueue.h"
 #include "QueryEngine/QueryHint.h"
 #include "ThriftHandler/QueryState.h"
-#include "QueryEngine/CiderResultProvider.h"
 
 namespace Catalog_Namespace {
 class Catalog;
@@ -56,6 +55,11 @@ class Loader;
 class Calcite;
 
 namespace QueryRunner {
+
+class CiderResultIterator;
+
+class CiderDataProvider {
+};
 
 class QueryRunner {
  public:
@@ -148,6 +152,7 @@ class QueryRunner {
                                             const ExecutorDeviceType device_type,
                                             const bool hoist_literals = true,
                                             const bool allow_loop_joins = true);
+
   virtual std::shared_ptr<ExecutionResult> runSelectQuery(
       const std::string& query_str,
       const ExecutorDeviceType device_type,
@@ -157,26 +162,29 @@ class QueryRunner {
 
   virtual void runSelectQueryByIterator(
       const std::string& query_str,
-      CompilationOptions co,
-      ExecutionOptions eo,
-      const std::shared_ptr<CiderResultProvider> res_provider);
+      const ExecutorDeviceType device_type,
+      const bool hoist_literals,
+      const bool allow_loop_joins,
+      const bool just_explain,
+      const std::shared_ptr<CiderDataProvider> dp = nullptr);
 
-  /**
-   * Cider to support iterator execution fashion, each time emit a consumer
-   * @param query_str
-   * @param device_type
-   * @param hoist_literals
-   * @param allow_loop_joins
-   * @param just_explain
-   * @param res_provider provider of result iterator
-   */
-  virtual void runSelectQueryByIterator(
+  virtual std::shared_ptr<CiderResultIterator> ciderExecute(
       const std::string& query_str,
       const ExecutorDeviceType device_type,
       const bool hoist_literals,
       const bool allow_loop_joins,
       const bool just_explain = false,
-      const std::shared_ptr<CiderResultProvider> res_provider = nullptr);
+      std::shared_ptr<CiderDataProvider> dp = nullptr);
+
+  virtual std::shared_ptr<ExecutionResult> runSelectQueryByIterator(
+      const std::string& query_str,
+      CompilationOptions co,
+      ExecutionOptions eo,
+      std::shared_ptr<CiderDataProvider> dp = nullptr);
+
+  virtual void executeLaunchTasks(
+      std::shared_ptr<QueryDispatchQueue::Task> query_launch_task,
+      std::shared_ptr<ExecutionResult> result);
 
   virtual std::shared_ptr<ResultSet> runSQLWithAllowingInterrupt(
       const std::string& query_str,
@@ -233,6 +241,44 @@ class QueryRunner {
   std::shared_ptr<Catalog_Namespace::SessionInfo> session_info_;
   std::unique_ptr<QueryDispatchQueue> dispatch_queue_;
   std::shared_ptr<Data_Namespace::DataMgr> data_mgr_;
+};
+
+class CiderResultIterator {
+ public:
+  CiderResultIterator(QueryRunner& runner,
+                      CompilationOptions co,
+                      ExecutionOptions eo,
+                      const std::string& query_str,
+                      std::shared_ptr<CiderDataProvider> dp)
+      : runner_(runner)
+      , co_(co)
+      , eo_(eo)
+      , query_str_(query_str)
+      , dp_(dp) {}
+  std::shared_ptr<ExecutionResult> next(size_t required_size);
+
+ private:
+  QueryRunner& runner_;
+  CompilationOptions co_;
+  ExecutionOptions eo_;
+  const std::string& query_str_;
+  std::shared_ptr<CiderDataProvider> dp_;
+  std::shared_ptr<ExecutionResult> exec_res_ = nullptr;
+
+  size_t remaining_size_ = 0;
+  // TODO remove me, just to workaround before supporting iterative execution mode
+  bool is_exec_res_used_ = false;
+
+  bool hasMoreDataLeft(size_t required_size);
+  // FIXME should return byte size of output result?
+  size_t execution();
+
+  /**
+   * Build the iterator  pass in options
+   * Optional to build iterator and default is OmnisciDB built-in data typed
+   * @return whether output data convertor is registered successfully
+   */
+  bool registerOutputConvertor();
 };
 
 class ImportDriver : public QueryRunner {

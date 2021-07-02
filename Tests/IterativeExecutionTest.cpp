@@ -21,7 +21,6 @@
 #include "../QueryEngine/Descriptors/RelAlgExecutionDescriptor.h"
 #include "../QueryEngine/Execute.h"
 #include "../QueryRunner/QueryRunner.h"
-#include "../QueryEngine/CiderResultProvider.h"
 
 #include <array>
 #include <future>
@@ -61,16 +60,14 @@ inline void run_ddl_statement(const std::string& input_str) {
   QR::get()->runDDLStatement(input_str);
 }
 
-TargetValue run_simple_agg_itr(const std::string& query_str, const ExecutorDeviceType dt) {
-  auto res_provider_ptr = std::make_shared<CiderResultProvider>();
-  QR::get()
-      ->runSelectQueryByIterator(query_str,
-                       dt,
-          /*hoist_literals=*/true,
-          /*allow_loop_joins=*/false,
-          /*just_explain=*/false,
-          /* result provider */res_provider_ptr);
-  auto res = res_provider_ptr->getIterator()->next();
+TargetValue run_simple_agg_itr(const std::string& query_str,
+                               const ExecutorDeviceType dt) {
+  auto res_itr = QR::get()->ciderExecute(query_str,
+                                         dt,
+                                         /*hoist_literals=*/true,
+                                         /*allow_loop_joins=*/false,
+                                         /*just_explain=*/false);
+  auto res = res_itr->next(/* dummy size = */ 100);
   auto crt_row = res->getRows()->getNextRow(true, true);
   CHECK_EQ(size_t(1), crt_row.size()) << query_str;
   return crt_row[0];
