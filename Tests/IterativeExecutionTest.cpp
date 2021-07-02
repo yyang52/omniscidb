@@ -100,11 +100,14 @@ const char* table_schema = R"(
     ) WITH (FRAGMENT_SIZE=2);
 )";
 
-void run_sql_execute_iterator_test(const std::string& table_name, const ExecutorDeviceType dt) {
+void run_sql_execute_iterator_test(const std::string& table_name,
+                                   const std::string& filter,
+                                   const int result_count,
+                                   const ExecutorDeviceType dt) {
   // basic queries
-  EXPECT_EQ(15,
+  EXPECT_EQ(result_count,
             v<int64_t>(run_simple_agg_itr(
-                "SELECT COUNT(*) FROM " + table_name + " WHERE i32 < 50;", dt)));
+                "SELECT COUNT(*) FROM " + table_name + " " + filter + ";", dt)));
 }
 
 void run_sql_execute_test(const std::string& table_name, const ExecutorDeviceType dt) {
@@ -217,6 +220,49 @@ void build_table(const std::string& table_name) {
   }
 }
 
+class ParquetDataTableTestEnv : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    std::string query = "CREATE TABLE test_parquet_table (i BIGINT);";
+    run_ddl_statement(query);
+    std::string import_parquet_table_str{
+        "COPY test_parquet_table FROM "
+        "'../../Tests/FsiDataFiles/three_row_3_4_5.parquet' WITH "
+        "(header='false', parquet='true')"};
+    run_ddl_statement(import_parquet_table_str);
+  }
+
+  void TearDown() override {
+    if (!g_keep_data) {
+      run_ddl_statement("DROP TABLE IF EXISTS test_parquet_table;");
+    }
+  }
+
+};
+
+TEST_F(ParquetDataTableTestEnv, ParquetIterativeExecution) {
+  for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
+    SKIP_NO_GPU();
+
+    for (size_t i = 1; i <= g_max_num_executors; i *= 2) {
+      QR::get()->resizeDispatchQueue(i);
+      std::vector<std::future<void>> worker_threads;
+      auto execution_time = measure<>::execution([&]() {
+        for (size_t w = 0; w < i; w++) {
+          worker_threads.push_back(std::async(
+              std::launch::async, run_sql_execute_iterator_test,
+              "test_parquet_table", "WHERE i < 4", 1, dt));
+        }
+        for (auto& t : worker_threads) {
+          t.get();
+        }
+      });
+      LOG(ERROR) << "Finished execution with " << i << " executors, " << execution_time
+                 << " ms.";
+    }
+  }
+}
+
 class SingleTableTestEnv : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -245,7 +291,8 @@ TEST_F(SingleTableTestEnv, IterativeExecution) {
       auto execution_time = measure<>::execution([&]() {
         for (size_t w = 0; w < i; w++) {
           worker_threads.push_back(std::async(
-              std::launch::async, run_sql_execute_iterator_test, "test_parallel", dt));
+              std::launch::async, run_sql_execute_iterator_test,
+              "test_parallel", "WHERE i32 < 50", 15, dt));
         }
         for (auto& t : worker_threads) {
           t.get();
