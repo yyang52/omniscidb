@@ -634,7 +634,8 @@ std::shared_ptr<CiderResultIterator> QueryRunner::ciderExecute(
     const bool hoist_literals,
     const bool allow_loop_joins,
     const bool just_explain,
-    std::shared_ptr<CiderDataProvider> dp) {
+    std::shared_ptr<CiderDataProvider> dp,
+    std::shared_ptr<CiderResultProvider> rp) {
   auto co = CompilationOptions::defaults(device_type);
   co.hoist_literals = hoist_literals;
 // FIXME uncomment this
@@ -643,7 +644,8 @@ std::shared_ptr<CiderResultIterator> QueryRunner::ciderExecute(
       co,
       defaultExecutionOptionsForRunSQL(allow_loop_joins, just_explain),
       query_str,
-      dp);
+      dp,
+      rp);
   //  return nullptr;
 }
 
@@ -834,6 +836,7 @@ size_t CiderResultIterator::execution() {
   } else {
     is_exec_res_used_ = true;
     exec_res_ = runner_.runSelectQueryByIterator(query_str_, co_, eo_, dp_);
+    rp_->registerExecutionResult(exec_res_);
     return exec_res_->getRows()->rowCount(true);
   }
 }
@@ -848,11 +851,12 @@ bool CiderResultIterator::hasMoreDataLeft(size_t required_size) {
   }
 }
 
-std::shared_ptr<ExecutionResult> CiderResultIterator::next(size_t required_size) {
+std::shared_ptr<CiderResultProvider> CiderResultIterator::next(size_t required_size) {
   //FIXME what to pass in?
   if(hasMoreDataLeft(required_size)) {
     size_t return_data_size = std::min(remaining_size_, required_size);
-    return exec_res_;
+    rp_->next(required_size);
+    return rp_;
   } else {
     return nullptr;
   }

@@ -26,6 +26,7 @@
 #include "Catalog/SysCatalog.h"
 #include "Catalog/TableDescriptor.h"
 #include "LeafAggregator.h"
+#include "QueryEngine/CiderResultProvider.h"
 #include "QueryEngine/CompilationOptions.h"
 #include "QueryEngine/JoinHashTable/BaselineJoinHashTable.h"
 #include "QueryEngine/JoinHashTable/HashJoin.h"
@@ -174,7 +175,8 @@ class QueryRunner {
       const bool hoist_literals,
       const bool allow_loop_joins,
       const bool just_explain = false,
-      std::shared_ptr<CiderDataProvider> dp = nullptr);
+      std::shared_ptr<CiderDataProvider> dp = nullptr,
+      std::shared_ptr<CiderResultProvider> rp = nullptr);
 
   virtual std::shared_ptr<ExecutionResult> runSelectQueryByIterator(
       const std::string& query_str,
@@ -249,13 +251,15 @@ class CiderResultIterator {
                       CompilationOptions co,
                       ExecutionOptions eo,
                       const std::string& query_str,
-                      std::shared_ptr<CiderDataProvider> dp)
+                      std::shared_ptr<CiderDataProvider> dp,
+                      std::shared_ptr<CiderResultProvider> rp)
       : runner_(runner)
       , co_(co)
       , eo_(eo)
       , query_str_(query_str)
-      , dp_(dp) {}
-  std::shared_ptr<ExecutionResult> next(size_t required_size);
+      , dp_(dp)
+      , rp_(rp) {}
+  std::shared_ptr<CiderResultProvider> next(size_t required_size);
 
  private:
   QueryRunner& runner_;
@@ -264,6 +268,7 @@ class CiderResultIterator {
   const std::string& query_str_;
   std::shared_ptr<CiderDataProvider> dp_;
   std::shared_ptr<ExecutionResult> exec_res_ = nullptr;
+  std::shared_ptr<CiderResultProvider> rp_;
 
   size_t remaining_size_ = 0;
   // TODO remove me, just to workaround before supporting iterative execution mode
