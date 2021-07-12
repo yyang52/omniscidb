@@ -64,13 +64,16 @@ inline void run_ddl_statement(const std::string& input_str) {
 
 TargetValue run_simple_agg_itr(const std::string& query_str,
                                const ExecutorDeviceType dt) {
+  // it's very tricky since we didn't know the database ID
+  // auto dp = std::make_shared<CiderDataProvider>(9, 0);
+  std::shared_ptr<CiderDataProvider> dp = nullptr;
   auto rp = std::make_shared<CiderArrowResultProvider>();
   auto res_itr = QR::get()->ciderExecute(query_str,
                                          dt,
                                          /*hoist_literals=*/true,
                                          /*allow_loop_joins=*/false,
                                          /*just_explain=*/false,
-                                         nullptr,
+                                         dp,
                                          rp);
   auto res = res_itr->next(/* dummy size = */ 100);
   auto crt_row = res->getRows()->getNextRow(true, true);
@@ -83,12 +86,12 @@ TargetValue run_simple_agg_itr(const std::string& query_str,
 
 TargetValue run_simple_agg(const std::string& query_str, const ExecutorDeviceType dt) {
   auto rows = QR::get()
-      ->runSelectQuery(query_str,
-                       dt,
-          /*hoist_literals=*/true,
-          /*allow_loop_joins=*/false,
-          /*just_explain=*/false)
-      ->getRows();
+                  ->runSelectQuery(query_str,
+                                   dt,
+                                   /*hoist_literals=*/true,
+                                   /*allow_loop_joins=*/false,
+                                   /*just_explain=*/false)
+                  ->getRows();
   auto crt_row = rows->getNextRow(true, true);
   CHECK_EQ(size_t(1), crt_row.size()) << query_str;
   return crt_row[0];
@@ -143,19 +146,19 @@ void run_sql_execute_test(const std::string& table_name, const ExecutorDeviceTyp
       QR::get()
           ->runSelectQuery("SELECT d, f, COUNT(*) FROM " + table_name + " GROUP BY d, f;",
                            dt,
-              /*hoist_literals=*/true,
-              /*allow_loop_joins=*/false,
-              /*just_explain=*/false)
+                           /*hoist_literals=*/true,
+                           /*allow_loop_joins=*/false,
+                           /*just_explain=*/false)
           ->getRows(),
       6));
   EXPECT_NO_THROW(check_returned_rows(
       QR::get()
           ->runSelectQuery("SELECT d, f, COUNT(*) FROM " + table_name +
-                           " GROUP BY d, f ORDER BY f DESC NULLS LAST LIMIT 5;",
+                               " GROUP BY d, f ORDER BY f DESC NULLS LAST LIMIT 5;",
                            dt,
-              /*hoist_literals=*/true,
-              /*allow_loop_joins=*/false,
-              /*just_explain=*/false)
+                           /*hoist_literals=*/true,
+                           /*allow_loop_joins=*/false,
+                           /*just_explain=*/false)
           ->getRows(),
       5));
   EXPECT_NO_THROW(check_returned_rows(
@@ -163,8 +166,8 @@ void run_sql_execute_test(const std::string& table_name, const ExecutorDeviceTyp
           ->runSelectQuery(
               "SELECT approx_count_distinct(d), approx_count_distinct(str), i64, i32, "
               "i16 FROM " +
-              table_name +
-              " WHERE i32 < 50 GROUP BY i64, i32, i16 ORDER BY i64, i32, i16;",
+                  table_name +
+                  " WHERE i32 < 50 GROUP BY i64, i32, i16 ORDER BY i64, i32, i16;",
               dt,
               /*hoist_literals=*/true,
               /*allow_loop_joins=*/false,
@@ -187,8 +190,8 @@ void run_sql_execute_test(const std::string& table_name, const ExecutorDeviceTyp
   // joins
   EXPECT_EQ(1,
             v<int64_t>(run_simple_agg("SELECT COUNT(*) FROM " + table_name +
-                                      " a INNER JOIN (SELECT i32 FROM " + table_name +
-                                      " GROUP BY i32) b on a.i64 = b.i32;",
+                                          " a INNER JOIN (SELECT i32 FROM " + table_name +
+                                          " GROUP BY i32) b on a.i64 = b.i32;",
                                       dt)));
 }
 
@@ -245,7 +248,6 @@ class ParquetDataTableTestEnv : public ::testing::Test {
       run_ddl_statement("DROP TABLE IF EXISTS test_parquet_table;");
     }
   }
-
 };
 
 TEST_F(ParquetDataTableTestEnv, ParquetIterativeExecution) {
@@ -257,16 +259,19 @@ TEST_F(ParquetDataTableTestEnv, ParquetIterativeExecution) {
       std::vector<std::future<void>> worker_threads;
       auto execution_time = measure<>::execution([&]() {
         for (size_t w = 0; w < i; w++) {
-          worker_threads.push_back(std::async(
-              std::launch::async, run_sql_execute_iterator_test,
-              "test_parquet_table", "WHERE i < 4", 1, dt));
+          worker_threads.push_back(std::async(std::launch::async,
+                                              run_sql_execute_iterator_test,
+                                              "test_parquet_table",
+                                              "WHERE i < 4",
+                                              1,
+                                              dt));
         }
         for (auto& t : worker_threads) {
           t.get();
         }
       });
-      LOG(ERROR) << "Finished execution with " << i << " executors, " << execution_time
-                 << " ms.";
+      LOG(INFO) << "Finished execution with " << i << " executors, " << execution_time
+                << " ms.";
     }
   }
 }
@@ -298,16 +303,19 @@ TEST_F(SingleTableTestEnv, IterativeExecution) {
       std::vector<std::future<void>> worker_threads;
       auto execution_time = measure<>::execution([&]() {
         for (size_t w = 0; w < i; w++) {
-          worker_threads.push_back(std::async(
-              std::launch::async, run_sql_execute_iterator_test,
-              "test_parallel", "WHERE i32 < 50", 15, dt));
+          worker_threads.push_back(std::async(std::launch::async,
+                                              run_sql_execute_iterator_test,
+                                              "test_parallel",
+                                              "WHERE i32 < 50",
+                                              15,
+                                              dt));
         }
         for (auto& t : worker_threads) {
           t.get();
         }
       });
-      LOG(ERROR) << "Finished execution with " << i << " executors, " << execution_time
-                 << " ms.";
+      LOG(INFO) << "Finished execution with " << i << " executors, " << execution_time
+                << " ms.";
     }
   }
 }

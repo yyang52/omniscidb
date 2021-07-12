@@ -18,6 +18,7 @@
 
 #include "Calcite/Calcite.h"
 #include "Catalog/Catalog.h"
+#include "DataMgr/DataProvider.h"
 #include "DistributedLoader.h"
 #include "Geospatial/Transforms.h"
 #include "ImportExport/CopyParams.h"
@@ -672,6 +673,13 @@ std::shared_ptr<ExecutionResult> QueryRunner::runSelectQueryByIterator(
   }
 
   const auto& cat = session_info_->getCatalog();
+  // we have to make sure the dataMgr have been initialized. Otherwise it will crash.
+  Data_Namespace::DataMgr* dataMgr = &cat.getDataMgr();
+  CHECK(dataMgr);
+  // CHECK(dp);
+  dataMgr->setDataProvider(dp);
+  // auto tmp_data_provider = std::make_shared<DataProvider>(8, 0);
+  // dataMgr->setDataProvider(tmp_data_provider);
 
   std::shared_ptr<ExecutionResult> result;
   auto query_launch_task = std::make_shared<QueryDispatchQueue::Task>(

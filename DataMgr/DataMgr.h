@@ -27,6 +27,7 @@
 #include "AbstractBufferMgr.h"
 #include "BufferMgr/Buffer.h"
 #include "BufferMgr/BufferMgr.h"
+#include "DataProvider.h"
 #include "MemoryLevel.h"
 #include "PersistentStorageMgr/PersistentStorageMgr.h"
 
@@ -211,6 +212,11 @@ class DataMgr {
   // database_id, table_id, column_id, fragment_id
   std::vector<int> levelSizes_;
 
+  void setDataProvider(const std::shared_ptr<CiderDataProvider> data_provider) {
+    data_provider_ = data_provider;
+  }
+  std::shared_ptr<CiderDataProvider> getDataProvider() { return data_provider_; }
+
   struct SystemMemoryUsage {
     size_t free;      // available CPU RAM memory in bytes
     size_t total;     // total CPU RAM memory in bytes
@@ -243,6 +249,7 @@ class DataMgr {
   bool hasGpus_;
   size_t reservedGpuMem_;
   std::mutex buffer_access_mutex_;
+  std::shared_ptr<CiderDataProvider> data_provider_;
 };
 
 std::ostream& operator<<(std::ostream& os, const DataMgr::SystemMemoryUsage&);

@@ -198,24 +198,40 @@ const int8_t* ColumnFetcher::getOneTableColumnFragment(
     const Data_Namespace::MemoryLevel memory_level,
     const int device_id,
     DeviceAllocator* allocator) const {
+  // TODO: refactor
+  const auto& cat = *executor_->getCatalog();
+
+  VLOG(2) << "DEBUG LOG we are fetching column table: " << table_id
+          << " frag: " << frag_id << " col:" << col_id;
+  Data_Namespace::DataMgr* dataMgr = &cat.getDataMgr();
+  auto data_provider = dataMgr->getDataProvider();
+  int real_table_id = table_id;
+  int real_frag_id = frag_id;
+  if (data_provider) {
+    // int32_t my_table_id = data_provider->getTableId();
+    // int32_t my_fragment_id = data_provider->getFragmentId();
+    // VLOG(2) << "DataProvider table: " << my_table_id << " fragment: " << my_fragment_id;
+    real_table_id = data_provider->getTableId();
+    real_frag_id = data_provider->getFragmentId();
+  }
+
   static std::mutex varlen_chunk_mutex;  // TODO(alex): remove
   static std::mutex chunk_list_mutex;
-  const auto fragments_it = all_tables_fragments.find(table_id);
+  const auto fragments_it = all_tables_fragments.find(real_table_id);
   CHECK(fragments_it != all_tables_fragments.end());
   const auto fragments = fragments_it->second;
-  const auto& fragment = (*fragments)[frag_id];
+  const auto& fragment = (*fragments)[real_frag_id];
   if (fragment.isEmptyPhysicalFragment()) {
     return nullptr;
   }
   std::shared_ptr<Chunk_NS::Chunk> chunk;
   auto chunk_meta_it = fragment.getChunkMetadataMap().find(col_id);
   CHECK(chunk_meta_it != fragment.getChunkMetadataMap().end());
-  CHECK(table_id > 0);
-  const auto& cat = *executor_->getCatalog();
-  auto cd = get_column_descriptor(col_id, table_id, cat);
+  CHECK(real_table_id > 0);
+  auto cd = get_column_descriptor(col_id, real_table_id, cat);
   CHECK(cd);
   const auto col_type =
-      get_column_type(col_id, table_id, cd, executor_->temporary_tables_);
+      get_column_type(col_id, real_table_id, cd, executor_->temporary_tables_);
   const bool is_real_string =
       col_type.is_string() && col_type.get_compression() == kENCODING_NONE;
   const bool is_varlen =
@@ -240,7 +256,7 @@ const int8_t* ColumnFetcher::getOneTableColumnFragment(
     chunk_holder.push_back(chunk);
   }
   if (is_varlen) {
-    CHECK_GT(table_id, 0);
+    CHECK_GT(real_table_id, 0);
     CHECK(chunk_meta_it != fragment.getChunkMetadataMap().end());
     chunk_iter_holder.push_back(chunk->begin_iterator(chunk_meta_it->second));
     auto& chunk_iter = chunk_iter_holder.back();

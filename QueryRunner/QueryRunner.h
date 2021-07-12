@@ -55,12 +55,11 @@ class Loader;
 
 class Calcite;
 
+class CiderDataProvider;
+
 namespace QueryRunner {
 
 class CiderResultIterator;
-
-class CiderDataProvider {
-};
 
 class QueryRunner {
  public:
