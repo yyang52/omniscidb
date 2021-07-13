@@ -27,7 +27,7 @@ class CiderDataProvider {
 
   int32_t getTableId() { return table_id_; }
   int32_t getFragmentId() { return fragment_id_; }
-
+  virtual ~CiderDataProvider() = default;
  protected:
   int32_t table_id_;
   // int32_t column_id; // we should NOT provide column id info since this will depend on

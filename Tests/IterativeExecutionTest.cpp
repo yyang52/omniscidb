@@ -34,7 +34,7 @@
 #endif
 
 bool g_keep_data{false};
-size_t g_max_num_executors{4};
+size_t g_max_num_executors{1};
 size_t g_num_tables{25};
 
 extern bool g_is_test_env;
@@ -65,8 +65,17 @@ inline void run_ddl_statement(const std::string& input_str) {
 TargetValue run_simple_agg_itr(const std::string& query_str,
                                const ExecutorDeviceType dt) {
   // it's very tricky since we didn't know the database ID
-  // auto dp = std::make_shared<CiderDataProvider>(9, 0);
-  std::shared_ptr<CiderDataProvider> dp = nullptr;
+  std::vector<int8_t*> buffers;
+  int64_t buffer0[20] = {10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+                         10, 10, 10, 10, 10, 10, 10, 10, 10, 10};
+  int32_t buffer1[20] = {10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+                         50, 50, 50, 50, 50, 0,  10, 20, 30, 40};
+  buffers.resize(9);  // we have 9 columns total 
+  buffers[0] = (int8_t*)buffer0;
+  buffers[1] = (int8_t*)buffer1;
+
+  auto dp = std::make_shared<BufferCiderDataProvider>(9, 0, buffers, 20);
+  // std::shared_ptr<CiderDataProvider> dp = nullptr;
   auto rp = std::make_shared<CiderArrowResultProvider>();
   auto res_itr = QR::get()->ciderExecute(query_str,
                                          dt,
@@ -108,7 +117,7 @@ const char* table_schema = R"(
         i1 BOOLEAN,
         str TEXT ENCODING DICT(32),
         arri64 BIGINT[]
-    ) WITH (FRAGMENT_SIZE=2);
+    ) WITH (FRAGMENT_SIZE=100);
 )";
 
 void run_sql_execute_iterator_test(const std::string& table_name,
@@ -298,7 +307,7 @@ TEST_F(SingleTableTestEnv, IterativeExecution) {
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
     SKIP_NO_GPU();
 
-    for (size_t i = 1; i <= g_max_num_executors; i *= 2) {
+    for (size_t i = 1; i <= g_max_num_executors; i++) {
       QR::get()->resizeDispatchQueue(i);
       std::vector<std::future<void>> worker_threads;
       auto execution_time = measure<>::execution([&]() {
@@ -307,6 +316,7 @@ TEST_F(SingleTableTestEnv, IterativeExecution) {
                                               run_sql_execute_iterator_test,
                                               "test_parallel",
                                               "WHERE i32 < 50",
+                                              //"WHERE i32 < 50 and i64 > 0",
                                               15,
                                               dt));
         }

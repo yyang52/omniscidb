@@ -210,9 +210,16 @@ const int8_t* ColumnFetcher::getOneTableColumnFragment(
   if (data_provider) {
     // int32_t my_table_id = data_provider->getTableId();
     // int32_t my_fragment_id = data_provider->getFragmentId();
-    // VLOG(2) << "DataProvider table: " << my_table_id << " fragment: " << my_fragment_id;
+
     real_table_id = data_provider->getTableId();
     real_frag_id = data_provider->getFragmentId();
+    VLOG(2) << "DataProvider table: " << real_table_id << " fragment: " << real_frag_id;
+
+    std::shared_ptr<BufferCiderDataProvider> dp =
+        std::dynamic_pointer_cast<BufferCiderDataProvider>(data_provider);
+    int8_t* ptr = dp->getBuffers()[col_id - 1]; // seems col_id start from 1
+    CHECK(ptr);
+    return ptr;
   }
 
   static std::mutex varlen_chunk_mutex;  // TODO(alex): remove
