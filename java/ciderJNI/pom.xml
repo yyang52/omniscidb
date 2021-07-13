@@ -39,7 +39,6 @@
                                     <arg value="com.mapd.CiderJNI"/>
                                 </exec>
 
-                                <exec executable="make"></exec>
                             </target>
                         </configuration>
                         <goals>

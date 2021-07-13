@@ -8,9 +8,8 @@ public class CiderJNI {
       System.loadLibrary("ciderjni");
     }
 
-    public native void sayHello();
-
-    public static void main(String[] args) {
-      new CiderJNI().sayHello();
-    }
+    public static native int processBlocks(String sql, String schema,
+            long[] dataBuffers, long[] dataNulls,
+            long[] resultBuffers, long[] resultNulls,
+            int rowCount);
 }

@@ -9,11 +9,11 @@ extern "C" {
 #endif
 /*
  * Class:     com_mapd_CiderJNI
- * Method:    sayHello
- * Signature: ()V
+ * Method:    processBlocks
+ * Signature: (Ljava/lang/String;Ljava/lang/String;[J[J[J[JI)I
  */
-JNIEXPORT void JNICALL Java_com_mapd_CiderJNI_sayHello
-  (JNIEnv *, jobject);
+JNIEXPORT jint JNICALL Java_com_mapd_CiderJNI_processBlocks
+  (JNIEnv *, jclass, jstring, jstring, jlongArray, jlongArray, jlongArray, jlongArray, jint);
 
 #ifdef __cplusplus
 }
