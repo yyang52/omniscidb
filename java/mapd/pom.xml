@@ -5,6 +5,9 @@
   <artifactId>omnisci-utility</artifactId>
   <version>${omnisci.release.version}</version>
   <packaging>jar</packaging>
+  <properties>
+    <omnisci.release.version>1.2</omnisci.release.version>
+  </properties>
   <repositories>
     <repository>
       <id>MapD Dependencies</id>

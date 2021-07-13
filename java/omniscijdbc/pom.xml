@@ -17,7 +17,7 @@
     <maven.compiler.target>1.8</maven.compiler.target>
     <thrift.version>0.13.0</thrift.version>
     <skipTests>true</skipTests>
-    <omnisci.release.version>need-to-set-omnisci.release.version</omnisci.release.version>
+    <omnisci.release.version>1.2</omnisci.release.version>
   </properties>
   <dependencies>
     <dependency>
