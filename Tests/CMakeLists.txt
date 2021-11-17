@@ -108,6 +108,7 @@ endif()
 # Tests + Microbenchmarks
 add_executable(TableUpdateDeleteBenchmark TableUpdateDeleteBenchmark.cpp)
 add_executable(GeospatialBenchmark GeospatialBenchmark.cpp)
+add_executable(DataTransferBenchmark DataTransferBenchmark.cpp)
 
 set(EXECUTE_TEST_LIBS gtest mapd_thrift QueryRunner fmt::fmt ${MAPD_LIBRARIES} ${CMAKE_DL_LIBS} ${CUDA_LIBRARIES} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
 set(THRIFT_HANDLER_TEST_LIBRARIES thrift_handler ${EXECUTE_TEST_LIBS})
@@ -217,6 +218,7 @@ endif()
 
 target_link_libraries(TableUpdateDeleteBenchmark benchmark ${EXECUTE_TEST_LIBS})
 target_link_libraries(GeospatialBenchmark benchmark ${EXECUTE_TEST_LIBS})
+target_link_libraries(DataTransferBenchmark benchmark ${EXECUTE_TEST_LIBS})
 
 if(ENABLE_CUDA)
   target_link_libraries(GpuSharedMemoryTest ${EXECUTE_TEST_LIBS})
