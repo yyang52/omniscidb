@@ -108,6 +108,7 @@ endif()
 # Tests + Microbenchmarks
 add_executable(TableUpdateDeleteBenchmark TableUpdateDeleteBenchmark.cpp)
 add_executable(GeospatialBenchmark GeospatialBenchmark.cpp)
+# find_package(Arrow REQUIRED)
 add_executable(DataTransferBenchmark DataTransferBenchmark.cpp)
 
 set(EXECUTE_TEST_LIBS gtest mapd_thrift QueryRunner fmt::fmt ${MAPD_LIBRARIES} ${CMAKE_DL_LIBS} ${CUDA_LIBRARIES} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
