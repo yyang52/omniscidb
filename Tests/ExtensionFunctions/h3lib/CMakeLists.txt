@@ -4,7 +4,7 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 add_definitions("-DBASE_PATH=\"${TEST_BASE_PATH}\"")
 
 add_executable(H3LibExtFuncTest H3LibExtFuncTest.cpp)
-target_link_libraries(H3LibExtFuncTest ${EXECUTE_TEST_LIBS})
+target_link_libraries(H3LibExtFuncTest ${EXECUTE_TEST_LIBS} curl)
 
 add_test(H3LibExtFuncTest H3LibExtFuncTest ${TEST_ARGS})
 
