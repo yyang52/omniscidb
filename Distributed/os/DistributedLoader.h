@@ -18,7 +18,7 @@
 #define DISTRIBUTEDLOADER_H
 
 #include "ImportExport/Importer.h"
-#include "LeafAggregator.h"
+#include "Distributed/os/LeafAggregator.h"
 
 class DistributedLoader : public import_export::Loader {
  public:

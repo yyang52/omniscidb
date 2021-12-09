@@ -35,7 +35,7 @@
 #include <llvm/IR/Value.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Transforms/Utils/ValueMapper.h>
-#include <rapidjson/document.h>
+#include <ThirdParty/rapidjson/rapidjson/document.h>
 
 #include "QueryEngine/AggregatedColRange.h"
 #include "QueryEngine/BufferCompaction.h"

@@ -25,7 +25,7 @@
 
 #include <boost/program_options.hpp>
 #include "Catalog/AuthMetadata.h"
-#include "LeafHostInfo.h"
+#include "Distributed/os/LeafHostInfo.h"
 
 class MapDProgramOptions : public boost::program_options::options_description {
  public:

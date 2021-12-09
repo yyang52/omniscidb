@@ -37,9 +37,9 @@
 #include <string>
 #include <unordered_map>
 
-#include "rapidjson/document.h"
-#include "rapidjson/stringbuffer.h"
-#include "rapidjson/writer.h"
+#include "ThirdParty/rapidjson/rapidjson/document.h"
+#include "ThirdParty/rapidjson/rapidjson/stringbuffer.h"
+#include "ThirdParty/rapidjson/rapidjson/writer.h"
 
 #include "Logger/Logger.h"
 #include "Shared/StringTransform.h"

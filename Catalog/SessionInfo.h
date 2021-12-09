@@ -34,7 +34,7 @@
 #include "Shared/Restriction.h"
 #include "SqliteConnector/SqliteConnector.h"
 
-#include "LeafHostInfo.h"
+#include "Distributed/os/LeafHostInfo.h"
 
 namespace Catalog_Namespace {
 

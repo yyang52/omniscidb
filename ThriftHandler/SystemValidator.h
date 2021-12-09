@@ -20,7 +20,7 @@
 #include "Catalog/Catalog.h"
 #include "Logger/Logger.h"
 
-#include "LeafAggregator.h"
+#include "Distributed/os/LeafAggregator.h"
 #include "QueryState.h"
 
 class DBHandler;

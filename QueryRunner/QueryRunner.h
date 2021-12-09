@@ -25,7 +25,7 @@
 #include "Catalog/SessionInfo.h"
 #include "Catalog/SysCatalog.h"
 #include "Catalog/TableDescriptor.h"
-#include "LeafAggregator.h"
+#include "Distributed/os/LeafAggregator.h"
 #include "QueryEngine/CompilationOptions.h"
 #include "QueryEngine/JoinHashTable/BaselineJoinHashTable.h"
 #include "QueryEngine/JoinHashTable/HashJoin.h"

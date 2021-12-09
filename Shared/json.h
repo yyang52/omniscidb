@@ -48,7 +48,7 @@
 
 #pragma once
 
-#include <rapidjson/document.h>
+#include <ThirdParty/rapidjson/rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 #include <limits>

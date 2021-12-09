@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include <rapidjson/document.h>
+#include <ThirdParty/rapidjson/rapidjson/document.h>
 
 namespace foreign_storage {
 /**

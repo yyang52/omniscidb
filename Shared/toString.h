@@ -54,8 +54,8 @@
 #include "sqldefs.h"
 
 #ifdef ENABLE_TOSTRING_RAPIDJSON
-#if __has_include(<rapidjson/document.h> )
-#include <rapidjson/document.h>
+#if __has_include(<ThirdParty/rapidjson/rapidjson/document.h> )
+#include <ThirdParty/rapidjson/rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 #else
