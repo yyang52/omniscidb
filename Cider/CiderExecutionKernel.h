@@ -29,16 +29,20 @@ class CiderExecutionKernel {
                             const int64_t* num_rows,
                             int64_t** out,
                             int32_t* matched_num,
-                            int32_t* err_code);
+                            int32_t* err_code,
+                            int64_t* init_agg_vals);
 
   void runWithData(const int8_t** col_buffers,
                    const int64_t* num_rows,
                    int64_t** out,
                    int32_t* matched_num,
-                   int32_t* err_code);
+                   int32_t* err_code,
+                   int64_t* init_agg_vals);
 
   void compileWorkUnit(const RelAlgExecutionUnit& ra_exe_unit,
                        const std::vector<InputTableInfo>& query_infos);
+
+  virtual std::string getLlvmIR();
 
   static std::shared_ptr<CiderExecutionKernel> create();
 

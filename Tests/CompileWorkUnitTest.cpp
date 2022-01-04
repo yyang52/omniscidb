@@ -88,6 +88,79 @@ RelAlgExecutionUnit buildFakeRelAlgEU() {
   return ra_exe_unit;
 }
 
+RelAlgExecutionUnit buildFakeAggRelAlgEU() {
+  int table_id = 100;
+  int column_id_0 = 1;
+  int column_id_1 = 2;
+
+  // input_descs
+  std::vector<InputDescriptor> input_descs;
+  InputDescriptor input_desc_0(table_id, 0);
+  input_descs.push_back(input_desc_0);
+
+  // input_col_descs
+  std::list<std::shared_ptr<const InputColDescriptor>> input_col_descs;
+  std::shared_ptr<const InputColDescriptor> input_col_desc_0 =
+      std::make_shared<const InputColDescriptor>(column_id_0, table_id, 0);
+  std::shared_ptr<const InputColDescriptor> input_col_desc_1 =
+      std::make_shared<const InputColDescriptor>(column_id_1, table_id, 0);
+  input_col_descs.push_back(input_col_desc_0);
+  input_col_descs.push_back(input_col_desc_1);
+
+  // simple_quals
+  SQLTypes sqlTypes{SQLTypes::kBOOLEAN};
+  SQLTypes subtypes{SQLTypes::kNULLT};
+  SQLTypes dateSqlType{SQLTypes::kDATE};
+  SQLTypes longTypes{SQLTypes::kBIGINT};
+
+  SQLTypeInfo date_col_info(
+      dateSqlType, 0, 0, false, EncodingType::kENCODING_DATE_IN_DAYS, 0, subtypes);
+  std::shared_ptr<Analyzer::ColumnVar> col1 =
+      std::make_shared<Analyzer::ColumnVar>(date_col_info, table_id, column_id_0, 0);
+  SQLTypeInfo ti_boolean(
+      sqlTypes, 0, 0, false, EncodingType::kENCODING_NONE, 0, subtypes);
+  SQLTypeInfo ti_long(longTypes, 0, 0, false, EncodingType::kENCODING_NONE, 0, subtypes);
+
+  std::shared_ptr<Analyzer::Expr> leftExpr =
+      std::make_shared<Analyzer::UOper>(date_col_info, false, SQLOps::kCAST, col1);
+  Datum d;
+  d.bigintval = 757382400;
+  std::shared_ptr<Analyzer::Expr> rightExpr =
+      std::make_shared<Analyzer::Constant>(dateSqlType, false, d);
+  std::shared_ptr<Analyzer::Expr> simple_qual_0 = std::make_shared<Analyzer::BinOper>(
+      ti_boolean, false, SQLOps::kGE, SQLQualifier::kONE, leftExpr, rightExpr);
+  std::list<std::shared_ptr<Analyzer::Expr>> simple_quals;
+  simple_quals.push_back(simple_qual_0);
+
+  std::vector<Analyzer::Expr*> target_exprs;
+  std::shared_ptr<Analyzer::ColumnVar> col_expr_0 =
+      std::make_shared<Analyzer::ColumnVar>(ti_long, table_id, column_id_1, 0);
+  Analyzer::AggExpr* target_expr_0 =
+      new Analyzer::AggExpr(ti_long, kSUM, col_expr_0, false, nullptr);
+
+  target_exprs.push_back(target_expr_0);
+
+  // notice! size should be 0
+  std::list<std::shared_ptr<Analyzer::Expr>> groupby_exprs;
+  //  groupby_exprs.push_back(nullptr);
+
+  //   ra_exe_unit.input_descs = input_descs;
+  //   ra_exe_unit.input_col_descs = input_col_descs;
+  //   ra_exe_unit.simple_quals = simple_quals;
+  //   ra_exe_unit.groupby_exprs = groupby_exprs;
+  //   ra_exe_unit.target_exprs = target_exprs;
+
+  RelAlgExecutionUnit ra_exe_unit{input_descs,
+                                  input_col_descs,
+                                  simple_quals,
+                                  std::list<std::shared_ptr<Analyzer::Expr>>(),
+                                  JoinQualsPerNestingLevel(),
+                                  groupby_exprs,
+                                  target_exprs};
+
+  return ra_exe_unit;
+}
+
 // build parameters, for test only.
 std::vector<InputTableInfo> buildQueryInfo() {
   std::vector<InputTableInfo> query_infos;
@@ -157,18 +230,61 @@ TEST(APITest, case1) {
 
   kernel->compileWorkUnit(ra_exe_unit, query_infos);
 
+  //  std::cout << "compile IR : " << kernel->getLlvmIR() << std::endl;
+
   // build data input parameters
   int8_t** col_buffers = build_input_buf();
   int64_t num_rows = 10;
   int64_t** out_buffers = build_out_buf();
   int32_t matched_num = 0;
   int32_t err_code = 0;
+  int64_t init_agg_vals = 0;
 
-  kernel->runWithData(
-      (const int8_t**)col_buffers, &num_rows, out_buffers, &matched_num, &err_code);
+  kernel->runWithData((const int8_t**)col_buffers,
+                      &num_rows,
+                      out_buffers,
+                      &matched_num,
+                      &err_code,
+                      &init_agg_vals);
 
   // check result
   std::cout << "total match " << matched_num << " rows" << std::endl;
+
+  // release buffers
+  release_input_buf(col_buffers);
+  release_output_buf(out_buffers);
+}
+
+TEST(APITest, case2) {
+  auto kernel = CiderExecutionKernel::create();
+
+  // build compile input parameters
+  RelAlgExecutionUnit ra_exe_unit = buildFakeAggRelAlgEU();
+  std::vector<InputTableInfo> query_infos = buildQueryInfo();
+
+  kernel->compileWorkUnit(ra_exe_unit, query_infos);
+
+  //  std::cout << "compile IR : " << kernel->getLlvmIR() << std::endl;
+
+  // build data input parameters
+  int8_t** col_buffers = build_input_buf();
+  int64_t num_rows = 10;
+  int64_t** out_buffers = build_out_buf();
+  int32_t matched_num = 0;
+  int32_t err_code = 0;
+  int64_t init_agg_vals = 10;
+
+  kernel->runWithData((const int8_t**)col_buffers,
+                      &num_rows,
+                      out_buffers,
+                      &matched_num,
+                      &err_code,
+                      &init_agg_vals);
+
+  // check result
+  std::cout << "total match " << matched_num << " rows" << std::endl;
+  // should be 20(10 + 0 + 1 + 2 + 3 + 4)
+  std::cout << "sum result " << out_buffers[0][0] << std::endl;
 
   // release buffers
   release_input_buf(col_buffers);

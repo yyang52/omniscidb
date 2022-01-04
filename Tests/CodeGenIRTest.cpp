@@ -307,72 +307,92 @@ void create_and_populate_PART() {
 //   std::cout << "result have " << res->rowCount() << " rows." << std::endl;
 // }
 
-// TEST(TPCH, Q6) {
+TEST(TPCH, Q6S) {
+  double* ptr_double = new double(1);
+  std::string query =
+      "select sum(l_linenumber), sum(l_quantity) from tpch_lineitem where "
+      "l_shipdate >= date '1994-01-01' and l_shipdate < date '1994-01-01' + interval '1' "
+      "year";
+  auto res = run_multiple_agg_CPU(query);
+  std::cout << "result have " << res->rowCount() << " rows." << std::endl;
+  auto d = TestHelpers::v<int64_t>(res->getRowAt(0, 0, false));
+  std::cout << "result is " << d;
+  auto d1 = TestHelpers::v<double>(res->getRowAt(0, 1, false));
+  std::cout << "result is " << d1;
+}
+
+TEST(TPCH, Q6) {
+  std::string query =
+      "select sum(l_extendedprice * l_discount) as revenue from tpch_lineitem where "
+      "l_shipdate >= date '1994-01-01' and l_shipdate < date '1994-01-01' + interval '1' "
+      "year and l_discount between .06 - 0.01 and .06 + 0.01 and l_quantity <24;";
+  auto res = run_multiple_agg_CPU(query);
+  std::cout << "result have " << res->rowCount() << " rows." << std::endl;
+  auto d = TestHelpers::v<double>(res->getRowAt(0, 0, false));
+}
+
+TEST(TPCH, Q6M) {
+  std::string query =
+      "select l_orderkey  from tpch_lineitem where "
+      "l_shipdate >= date '1994-01-01' ;";
+  auto res = run_multiple_agg_CPU(query);
+  //   std::cout << "result have " << res->rowCount() << " rows." << std::endl;
+}
+
+TEST(TPCH, Q1) {
+  std::string query =
+      "select l_returnflag, l_linestatus, sum(l_quantity) as sum_qty, "
+      "sum(l_extendedprice) as sum_base_price, sum(l_extendedprice * (1 - l_discount))"
+      "as sum_disc_price, sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as "
+      "sum_charge, avg(l_quantity) as avg_qty, avg(l_extendedprice) as avg_price, "
+      "avg(l_discount) as avg_disc, count(*) as count_order from  tpch_lineitem where "
+      "l_shipdate <= date '1998-12-01' - interval '90' day group by l_returnflag, "
+      "l_linestatus order by l_returnflag, l_linestatus; ";
+  auto res = run_multiple_agg_CPU(query);
+  std::cout << "result have " << res->rowCount() << " rows." << std::endl;
+  auto r = res->getRowAt(0);
+}
+
+// TEST(TPCH, Q12) {
 //   std::string query =
-//       "select sum(l_extendedprice * l_discount) as revenue from tpch_lineitem where "
-//       "l_shipdate >= date '1994-01-01' and l_shipdate < date '1994-01-01' + interval '1' "
-//       "year and l_discount between .06 - 0.01 and .06 + 0.01 and l_quantity <24;";
+//       "select l_shipmode, sum(case when o_orderpriority = '1-URGENT' or o_orderpriority
+//       "
+//       "= '2-HIGH' then 1 else 0 end) as high_line_count, sum(case when o_orderpriority
+//       "
+//       "<> '1-URGENT' and o_orderpriority <> '2-HIGH' then 1 else 0 end) as "
+//       "low_line_count from 	tpch_orders, tpch_lineitem where o_orderkey = l_orderkey "
+//       "and "
+//       "l_shipmode in ('MAIL', 'SHIP') and l_commitdate < l_receiptdate and l_shipdate <
+//       " "l_commitdate and l_receiptdate >= date '1994-01-01' and l_receiptdate < date "
+//       "'1994-01-01' + interval '1' year group by l_shipmode order by l_shipmode;";
 //   auto res = run_multiple_agg_CPU(query);
 //   std::cout << "result have " << res->rowCount() << " rows." << std::endl;
 // }
-
- TEST(TPCH, Q6M) {
-   std::string query =
-       "select l_orderkey  from tpch_lineitem where "
-       "l_shipdate >= date '1994-01-01' ;";
-   auto res = run_multiple_agg_CPU(query);
-//   std::cout << "result have " << res->rowCount() << " rows." << std::endl;
- }
-
-// TEST(TPCH, Q1) {
-//   std::string query =
-//       "select l_returnflag, l_linestatus, sum(l_quantity) as sum_qty, "
-//       "sum(l_extendedprice) as sum_base_price, sum(l_extendedprice * (1 - l_discount))
-//       " "as sum_disc_price, sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as "
-//       "sum_charge, avg(l_quantity) as avg_qty, avg(l_extendedprice) as avg_price, "
-//       "avg(l_discount) as avg_disc, count(*) as count_order from  tpch_lineitem where "
-//       "l_shipdate <= date '1998-12-01' - interval '90' day group by l_returnflag, "
-//       "l_linestatus order by l_returnflag, l_linestatus; ";
-//   auto res = run_multiple_agg_CPU(query);
-//   std::cout << "result have " << res->rowCount() << " rows." << std::endl;
-// }
-
-//TEST(TPCH, Q12) {
-//  std::string query =
-//      "select l_shipmode, sum(case when o_orderpriority = '1-URGENT' or o_orderpriority "
-//      "= '2-HIGH' then 1 else 0 end) as high_line_count, sum(case when o_orderpriority "
-//      "<> '1-URGENT' and o_orderpriority <> '2-HIGH' then 1 else 0 end) as "
-//      "low_line_count from 	tpch_orders, tpch_lineitem where o_orderkey = l_orderkey "
-//      "and "
-//      "l_shipmode in ('MAIL', 'SHIP') and l_commitdate < l_receiptdate and l_shipdate < "
-//      "l_commitdate and l_receiptdate >= date '1994-01-01' and l_receiptdate < date "
-//      "'1994-01-01' + interval '1' year group by l_shipmode order by l_shipmode;";
-//  auto res = run_multiple_agg_CPU(query);
-//  std::cout << "result have " << res->rowCount() << " rows." << std::endl;
-//}
 
 // TEST(TPCH, Q14) {
 //   std::string query =
 //       "select 100.00 * sum(case when p_type like 'PROMO%' then l_extendedprice * (1 - "
 //       "l_discount) else 0 end) / sum(l_extendedprice * (1 - l_discount)) as "
-//       "promo_revenue from tpch_lineitem, tpch_part where l_partkey = p_partkey and l_shipdate >= "
-//       "date '1995-09-01' and l_shipdate < date '1995-09-01' + interval '1' month ;";
+//       "promo_revenue from tpch_lineitem, tpch_part where l_partkey = p_partkey and
+//       l_shipdate >= " "date '1995-09-01' and l_shipdate < date '1995-09-01' + interval
+//       '1' month ;";
 //   auto res = run_multiple_agg_CPU(query);
 //   std::cout << "result have " << res->rowCount() << " rows." << std::endl;
 // }
 
 // TEST(TPCH, Q_window) {
-//   std::string query = "select l_returnflag, AVG(l_quantity) OVER (PARTITION BY l_returnflag) as avg_qty from tpch_lineitem;";
-//   auto res = run_multiple_agg_CPU(query);
-//   std::cout << "result have " << res->rowCount() << " rows." << std::endl;
+//   std::string query = "select l_returnflag, AVG(l_quantity) OVER (PARTITION BY
+//   l_returnflag) as avg_qty from tpch_lineitem;"; auto res =
+//   run_multiple_agg_CPU(query); std::cout << "result have " << res->rowCount() << "
+//   rows." << std::endl;
 //
 // }
 
- TEST(TPCH, Q_limit) {
-   std::string query = "select * from tpch_lineitem limit 11;";
-   auto res = run_multiple_agg_CPU(query);
-   std::cout << "result have " << res->rowCount() << " rows." << std::endl;
- }
+TEST(TPCH, Q_limit) {
+  std::string query = "select * from tpch_lineitem limit 11;";
+  auto res = run_multiple_agg_CPU(query);
+  std::cout << "result have " << res->rowCount() << " rows." << std::endl;
+}
 
 int main(int argc, char** argv) {
   std::cout << "Starting CodeGenIRTest" << std::endl;
@@ -424,11 +444,11 @@ int main(int argc, char** argv) {
                      " Currently only supports single node tests.");
   desc.add_options()("use-temporary-tables",
                      "Use temporary tables instead of physical storage.");
-//  desc.add_options()("use-tbb",
-//                     po::value<bool>(&g_use_tbb_pool)
-//                         ->default_value(g_use_tbb_pool)
-//                         ->implicit_value(true),
-//                     "Use TBB thread pool implementation for query dispatch.");
+  //  desc.add_options()("use-tbb",
+  //                     po::value<bool>(&g_use_tbb_pool)
+  //                         ->default_value(g_use_tbb_pool)
+  //                         ->implicit_value(true),
+  //                     "Use TBB thread pool implementation for query dispatch.");
   desc.add_options()("use-disk-cache",
                      "Use the disk cache for all tables with minimum size settings.");
 

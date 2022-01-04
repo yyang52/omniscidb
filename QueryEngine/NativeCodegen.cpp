@@ -2892,7 +2892,8 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
 
   // Serialize the important LLVM IR functions to text for SQL EXPLAIN.
   std::string llvm_ir;
-  if (eo.just_explain) {
+//  if (eo.just_explain) {
+  if (true) { // we always want IR
     if (co.explain_type == ExecutorExplainType::Optimized) {
 #ifdef WITH_JIT_DEBUG
       throw std::runtime_error(
