@@ -45,11 +45,11 @@
 
 #include "Grantee.h"
 #include "ObjectRoleDescriptor.h"
-#include "PkiServer.h"
+#include "os/PkiServer.h"
 
 #include "../DataMgr/DataMgr.h"
 #include "../SqliteConnector/SqliteConnector.h"
-#include "LeafHostInfo.h"
+#include "Distributed/os/LeafHostInfo.h"
 
 #include "../Calcite/Calcite.h"
 #include "Shared/Restriction.h"

@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <rapidjson/document.h>
+#include <ThirdParty/rapidjson/rapidjson/document.h>
 #include <map>
 #include <vector>
 #include "Logger/Logger.h"

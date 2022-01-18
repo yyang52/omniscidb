@@ -23,7 +23,7 @@
 
 #pragma once
 
-#include "LeafAggregator.h"
+#include "Distributed/os/LeafAggregator.h"
 
 #ifdef HAVE_PROFILER
 #include <gperftools/heap-profiler.h>

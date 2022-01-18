@@ -397,12 +397,12 @@ std::unique_ptr<QueryMemoryDescriptor> QueryMemoryDescriptor::init(
         }
       }
 
-      const auto catalog = executor->getCatalog();
-      CHECK(catalog);
-      target_groupby_indices = executor->plan_state_->allow_lazy_fetch_
-                                   ? target_expr_proj_indices(ra_exe_unit, *catalog)
-                                   : std::vector<int64_t>{};
-
+//      const auto catalog = executor->getCatalog();
+//      CHECK(catalog);
+//      target_groupby_indices = executor->plan_state_->allow_lazy_fetch_
+//                                   ? target_expr_proj_indices(ra_exe_unit, *catalog)
+//                                   : std::vector<int64_t>{};
+      target_groupby_indices = std::vector<int64_t>{};
       col_slot_context = ColSlotContext(ra_exe_unit.target_exprs, target_groupby_indices);
       break;
     }

@@ -8,6 +8,8 @@ file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/Udf/udf_sample.cpp DESTINATION ${CMAKE_BIN
 
 add_executable(CodeGeneratorTest CodeGeneratorTest.cpp)
 add_executable(ExecuteTest ExecuteTest.cpp ClusterTester.cpp)
+add_executable(CodeGenIRTest CodeGenIRTest.cpp)
+add_executable(CompileWorkUnitTest CompileWorkUnitTest.cpp)
 add_executable(GeospatialTest GeospatialTest.cpp)
 add_executable(RunQueryLoop RunQueryLoop.cpp)
 add_executable(StringDictionaryTest StringDictionaryTest.cpp)
@@ -31,6 +33,7 @@ add_executable(CachingFileMgrTest CachingFileMgrTest.cpp)
 add_executable(JSONTest JSONTest.cpp)
 add_executable(DataRecyclerTest DataRecyclerTest.cpp)
 add_executable(DataMgrTest DataMgrTest.cpp)
+add_executable(VeloxFunctionTest VeloxFunctionTest.cpp)
 
 if(ENABLE_CUDA)
   message(DEBUG "Tests CUDA_COMPILATION_ARCH: ${CUDA_COMPILATION_ARCH}")
@@ -111,7 +114,7 @@ add_executable(GeospatialBenchmark GeospatialBenchmark.cpp)
 # find_package(Arrow REQUIRED)
 add_executable(DataTransferBenchmark DataTransferBenchmark.cpp)
 
-set(EXECUTE_TEST_LIBS gtest mapd_thrift QueryRunner fmt::fmt ${MAPD_LIBRARIES} ${CMAKE_DL_LIBS} ${CUDA_LIBRARIES} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
+set(EXECUTE_TEST_LIBS gtest mapd_thrift QueryRunner fmt ${MAPD_LIBRARIES} ${CMAKE_DL_LIBS} ${CUDA_LIBRARIES} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
 set(THRIFT_HANDLER_TEST_LIBRARIES thrift_handler ${EXECUTE_TEST_LIBS})
 
 # Replace Licensing library with TestLicensing library
@@ -132,6 +135,8 @@ target_link_libraries(TokenCompletionHintsTest token_completion_hints gtest mapd
 target_link_libraries(DumpRestoreTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(CodeGeneratorTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(ExecuteTest ${EXECUTE_TEST_LIBS})
+target_link_libraries(CodeGenIRTest ${EXECUTE_TEST_LIBS})
+target_link_libraries(CompileWorkUnitTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(GeospatialTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(RunQueryLoop ${EXECUTE_TEST_LIBS} bcrypt)
 target_link_libraries(ArrowCsvForeignStorageTest gtest ${EXECUTE_TEST_LIBS})
@@ -150,6 +155,7 @@ target_link_libraries(UpdateMetadataTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(StoragePerfTest gtest ${EXECUTE_TEST_LIBS})
 target_link_libraries(TopKTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(OmniSQLCommandTest gtest ${Boost_LIBRARIES} mapd_thrift)
+target_link_libraries(VeloxFunctionTest ${EXECUTE_TEST_LIBS})
 
 if(ENABLE_SYSTEM_TFS)
   target_link_libraries(SystemTableFunctionsTest ${EXECUTE_TEST_LIBS})
@@ -243,6 +249,8 @@ add_test(ArrowCsvForeignStorageTest ArrowCsvForeignStorageTest ${TEST_ARGS})
 add_test(AlterTableDdlTest AlterTableDdlTest ${TEST_ARGS})
 add_test(UtilTest UtilTest ${TEST_ARGS})
 add_test(ExecuteTest ExecuteTest ${TEST_ARGS})
+add_test(CodeGenIRTest CodeGenIRTest ${TEST_ARGS})
+add_test(CompileWorkUnitTest CompileWorkUnitTest ${TEST_ARGS})
 add_test(NAME ExecuteTestTemporaryTables COMMAND ExecuteTest ${TEST_ARGS} "--use-temporary-tables")
 add_test(GeospatialTest GeospatialTest ${TEST_ARGS})
 add_test(CodeGeneratorTest CodeGeneratorTest ${TEST_ARGS})
@@ -304,6 +312,7 @@ add_test(DataRecyclerTest DataRecyclerTest ${TEST_ARGS})
 add_test(LoadTableTest LoadTableTest ${TEST_ARGS})
 add_test(JSONTest JSONTest ${TEST_ARGS})
 add_test(DataMgrTest DataMgrTest ${TEST_ARGS})
+add_test(VeloxFunctionTest VeloxFunctionTest ${TEST_ARGS})
 
 if(ENABLE_SYSTEM_TFS)
   add_test(SystemTableFunctionsTest SystemTableFunctionsTest ${TEST_ARGS})
@@ -332,10 +341,10 @@ if("${MAPD_EDITION_LOWER}" STREQUAL "ee")
   endif()
 endif()
 
-find_package(fmt REQUIRED)
-add_executable(ArrowIpcIntegrationTest ArrowIpcIntegrationTest.cpp)
-target_link_libraries(ArrowIpcIntegrationTest gtest fmt::fmt ThriftClient mapd_thrift Logger Shared ${CUDA_LIBRARIES} ${Arrow_LIBRARIES})
-add_test(ArrowIpcIntegrationTest ArrowIpcIntegrationTest ${TEST_ARGS})
+# find_package(fmt REQUIRED)
+# add_executable(ArrowIpcIntegrationTest ArrowIpcIntegrationTest.cpp)
+# target_link_libraries(ArrowIpcIntegrationTest gtest fmt::fmt ThriftClient mapd_thrift Logger Shared ${CUDA_LIBRARIES} ${Arrow_LIBRARIES})
+# add_test(ArrowIpcIntegrationTest ArrowIpcIntegrationTest ${TEST_ARGS})
 
 #parse s3 credentials
 file(READ aws/s3client.conf S3CLIENT_CONF)
@@ -411,6 +420,9 @@ set(TEST_PROGRAMS
   LoadTableTest
   JSONTest
   DataMgrTest
+  CodeGenIRTest
+  CompileWorkUnitTest
+  VeloxFunctionTest
 )
 
 if (ENABLE_SYSTEM_TFS)
@@ -490,4 +502,4 @@ if(ENABLE_DBE)
   add_dependencies(all_tests dbe4py-test)
 endif()
 
-add_subdirectory(ExtensionFunctions/h3lib/)
+# add_subdirectory(ExtensionFunctions/h3lib/)

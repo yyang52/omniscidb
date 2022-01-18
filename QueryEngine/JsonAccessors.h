@@ -25,7 +25,7 @@
 #ifndef QUERYENGINE_JSONACCESSORS_H
 #define QUERYENGINE_JSONACCESSORS_H
 
-#include <rapidjson/document.h>
+#include <ThirdParty/rapidjson/rapidjson/document.h>
 #include "Logger/Logger.h"
 
 inline const rapidjson::Value& field(const rapidjson::Value& obj,

@@ -22,7 +22,7 @@
 #include <iostream>
 
 #include "CommandLineOptions.h"
-#include "LeafHostInfo.h"
+#include "Distributed/os/LeafHostInfo.h"
 #include "MapDRelease.h"
 #include "QueryEngine/GroupByAndAggregate.h"
 #include "Shared/Compressor.h"

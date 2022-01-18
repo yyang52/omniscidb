@@ -20,7 +20,7 @@
 #include "../AggregatedResult.h"
 #include "Catalog/Catalog.h"
 #include "DataMgr/MemoryLevel.h"
-#include "LeafHostInfo.h"
+#include "Distributed/os/LeafHostInfo.h"
 #include "QueryEngine/CompilationOptions.h"
 #include "QueryEngine/TargetMetaInfo.h"
 #include "gen-cpp/OmniSci.h"

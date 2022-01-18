@@ -18,7 +18,7 @@
 #define STRINGDICTIONARY_STRINGDICTIONARYCLIENT_H
 
 #include "DictRef.h"
-#include "LeafHostInfo.h"
+#include "Distributed/os/LeafHostInfo.h"
 
 #include <memory>
 #include <mutex>

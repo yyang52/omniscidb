@@ -41,7 +41,7 @@
 #include "Utils/Regexp.h"
 #include "Utils/StringLike.h"
 
-#include "LeafHostInfo.h"
+#include "Distributed/os/LeafHostInfo.h"
 
 bool g_cache_string_hash{true};
 

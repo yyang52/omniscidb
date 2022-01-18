@@ -26,7 +26,7 @@
 #include <memory>
 #include <unordered_map>
 
-#include <rapidjson/document.h>
+#include <ThirdParty/rapidjson/rapidjson/document.h>
 #include <boost/core/noncopyable.hpp>
 #include <boost/functional/hash.hpp>
 

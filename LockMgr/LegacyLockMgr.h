@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <rapidjson/document.h>
+#include <ThirdParty/rapidjson/rapidjson/document.h>
 #include <boost/variant.hpp>
 #include <map>
 #include <mutex>

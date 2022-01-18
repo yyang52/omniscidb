@@ -25,7 +25,7 @@
 #include "ClientContext.h"  // Provides us with default class
 #include "RegexSupport.h"
 
-#include <rapidjson/document.h>
+#include <ThirdParty/rapidjson/rapidjson/document.h>
 #include <fstream>
 #include <iostream>
 #include <type_traits>

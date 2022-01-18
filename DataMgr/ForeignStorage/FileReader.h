@@ -19,7 +19,7 @@
 #include <optional>
 
 #include <boost/filesystem.hpp>
-#include "rapidjson/document.h"
+#include "ThirdParty/rapidjson/rapidjson/document.h"
 
 #include "Archive/PosixFileArchive.h"
 #include "Catalog/ForeignTable.h"

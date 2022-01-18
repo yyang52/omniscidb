@@ -58,7 +58,7 @@
 #include "Shared/mapd_shared_mutex.h"
 #include "SqliteConnector/SqliteConnector.h"
 
-#include "LeafHostInfo.h"
+#include "Distributed/os/LeafHostInfo.h"
 
 enum GetTablesType { GET_PHYSICAL_TABLES_AND_VIEWS, GET_PHYSICAL_TABLES, GET_VIEWS };
 
